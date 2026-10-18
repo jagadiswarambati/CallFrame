@@ -89,6 +89,8 @@ create table if not exists stage_results (
   unique (call_id, stage, revision)
 );
 
+alter table stage_results alter column outcome_key drop not null;
+
 create table if not exists ai_suggestions (
   id uuid primary key default gen_random_uuid(),
   call_id uuid not null references calls(id) on delete cascade,
