@@ -1,6 +1,7 @@
 import cors from "cors";
 import dotenv from "dotenv";
 import express, { type Request, type Response } from "express";
+import fs from "node:fs";
 import path from "node:path";
 import { Pool, type PoolClient } from "pg";
 
@@ -16,7 +17,12 @@ const databaseUrl = process.env.DATABASE_URL;
 const pool = databaseUrl
   ? new Pool({
       connectionString: databaseUrl,
-      ssl: process.env.DATABASE_SSL === "false" ? false : {},
+      ssl:
+        process.env.DATABASE_SSL === "false"
+          ? false
+          : {
+              ca: fs.readFileSync(path.resolve(__dirname, "../certs/supabase-ca.crt")),
+            },
       connectionTimeoutMillis: 5_000,
     })
   : undefined;
@@ -120,6 +126,37 @@ app.get("/health", async (_request, response) => {
       service: "callframe-api",
       db: "down",
     });
+  }
+});
+
+app.get("/api/calls", async (request, response) => {
+  if (!pool) {
+    sendError(response, 503, "DATABASE_UNAVAILABLE", "The call service is unavailable.");
+    return;
+  }
+  const limit = Math.min(Number(request.query.limit ?? 50), 100);
+  const offset = Math.max(Number(request.query.offset ?? 0), 0);
+  try {
+    const [callsResult, countResult] = await Promise.all([
+      pool.query(
+        `SELECT id, prospect_name, company, prospect_role, status, last_stage,
+                outcome, next_step_type, next_step_channel, next_step_when, next_step_detail,
+                do_not_call, started_at, ended_at
+         FROM calls
+         ORDER BY started_at DESC
+         LIMIT $1 OFFSET $2`,
+        [limit, offset],
+      ),
+      pool.query("SELECT COUNT(*) FROM calls"),
+    ]);
+    response.json({
+      calls: callsResult.rows,
+      limit,
+      offset,
+      total: Number(countResult.rows[0].count),
+    });
+  } catch {
+    sendError(response, 503, "DATABASE_UNAVAILABLE", "Calls could not be listed. Please retry.");
   }
 });
 
