@@ -45,9 +45,16 @@ npm run dev
 
 Set `DATABASE_URL` in `backend/.env` to a Supabase pooler connection string
 using a restricted API role. Apply [`database/schema.sql`](database/schema.sql)
-to the Supabase project before implementing database-backed call routes.
-`GET http://localhost:4000/health` checks database connectivity and returns
-`503` while the database is unavailable or not configured.
+to the Supabase project. If the tables already exist, rerun the script so the
+stage-result `outcome_key` migration is applied. `GET
+http://localhost:4000/health` checks database connectivity and returns `503`
+while the database is unavailable or not configured.
+
+The initial call API supports starting a call, loading it by id, saving stage
+revisions, advancing progress, and closing with a validated outcome. The
+frontend keeps the active call id in browser storage and restores saved stage
+results from the API. A failed save keeps the current draft visible and blocks
+navigation or closing until the save succeeds.
 
 The frontend reads `NEXT_PUBLIC_API_URL` from `frontend/.env.local`. It is
 public configuration and must not contain secrets. Backend credentials,
@@ -76,11 +83,10 @@ integration is not implemented yet.
 
 ## Current status
 
-This is the project foundation, not the finished Callframe application. Call
-creation and persistence, the eight-stage workspace, outcome rules, do-not-call
-enforcement, history, Gemini assistance, access-code handling, production role
-grants, and deployment verification remain to be implemented. The SQL file
-defines the initial data shape and row-level security, but does not yet provide
-the transactional save function or a complete production privilege setup.
-The frontend and backend have not been deployed; production URLs are not yet
-available.
+The start screen, eight-stage workspace, stage-result revision saves, early
+ending, callback/document/referral details, do-not-call validation, and saved
+call summary are implemented. History browsing, Gemini assistance, access-code
+handling, production role grants, and deployment verification remain
+incomplete. Stage saving and closing use backend transactions; no database
+connection or live Supabase save has been verified in this environment. The
+frontend and backend have not been deployed; production URLs are not available.
