@@ -710,8 +710,635 @@ function Workspace() {
     setSaveError("");
   };
 
+  // Early returns - must come before JSX variable definitions to avoid parsing issues
+  if (loadError && !call) {
+    return (
+      <div className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-4">
+        <div className="card p-8 max-w-lg w-full text-center">
+          <h1 className="heading-3 text-espresso-100 mb-3">Could not restore the call</h1>
+          <p className="body text-espresso-500 mb-6" role="alert">{loadError}</p>
+          <button className="btn btn--primary" onClick={retryLoad} type="button">
+            Retry loading
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!call) {
+    return (
+      <div className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-4">
+        <div className="card p-8 md:p-12 max-w-xl w-full">
+          <Link href="/" className="logo flex items-center gap-3 mb-6 inline-block" aria-label="Callframe Home">
+            <span className="logo-mark" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+              </svg>
+            </span>
+            <span>Callframe</span>
+          </Link>
+          <h1 className="heading-2 text-espresso-100 mb-3">Start a call</h1>
+          <p className="body-lg text-espresso-500 mb-8">Keep the conversation clear, record what was actually said, and capture an honest next step.</p>
+          {loading && (
+            <p className="mb-6 p-3 rounded-lg bg-ochre-50 text-sm text-ochre-800" role="status">
+              Restoring a saved call or waiting for the service…
+            </p>
+          )}
+          {!serverReady && (
+            <div className="mb-6 rounded-lg bg-ochre-50 border border-ochre-200 p-4" role="status">
+              <p className="font-semibold text-ochre-800">Warming up the server…</p>
+              <p className="mt-1 text-sm text-ochre-700">
+                The API is starting (cold start on free tier). This may take up to a minute.
+                We&apos;ll retry automatically.
+              </p>
+              <div className="mt-2 h-2 w-full bg-ochre-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full bg-ochre-500 ${reduceMotion ? "" : "animate-pulse"}`}
+                  style={{ width: "100%" }}
+                />
+              </div>
+            </div>
+          )}
+          <form className="space-y-5" onSubmit={startCall}>
+            <div>
+              <label className="label" htmlFor="prospect-name">Prospect name</label>
+              <input
+                autoComplete="name"
+                className="input"
+                id="prospect-name"
+                maxLength={4000}
+                onChange={(event) => setProspectName(event.target.value)}
+                required
+                value={prospectName}
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="company">Company</label>
+              <input
+                autoComplete="organization"
+                className="input"
+                id="company"
+                maxLength={4000}
+                onChange={(event) => setCompany(event.target.value)}
+                required
+                value={company}
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="prospect-role">
+                Role <span className="font-normal text-espresso-500">· optional</span>
+              </label>
+              <input
+                className="input"
+                id="prospect-role"
+                maxLength={4000}
+                onChange={(event) => setRole(event.target.value)}
+                value={role}
+              />
+            </div>
+            {startError && (
+              <p className="rounded-lg bg-red-50 p-3 text-sm leading-6 text-red-800" role="alert">
+                {startError}
+              </p>
+            )}
+            <button
+              className="btn btn--primary btn--lg w-full"
+              disabled={loading || !serverReady}
+              type="submit"
+            >
+              {loading ? "Starting…" : !serverReady ? "Warming up server…" : "Start call"}
+            </button>
+          </form>
+          <p className="mt-4 caption text-espresso-500">
+            Call details are sent to the backend for saving. If saving fails, the form stays filled so you can retry.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (call.status !== "in_progress") {
+    const finalOutcome = finalOutcomes.find((item) => item.key === call.outcome);
+    const nextStepText = [
+      call.next_step_type,
+      call.next_step_when,
+      call.next_step_channel,
+      call.next_step_detail,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
+    return (
+      <div className="min-h-[calc(100vh-8rem)] px-4 py-12">
+        <div className="max-w-2xl mx-auto">
+          <div className="card p-8">
+            <Link href="/" className="logo flex items-center gap-3 mb-6 inline-block" aria-label="Callframe Home">
+              <span className="logo-mark" aria-hidden="true">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                </svg>
+              </span>
+              <span>Callframe</span>
+            </Link>
+            <h1 className="heading-2 text-espresso-100 mb-2">
+              {call.status === "completed" ? "Call completed" : "Call ended early"}
+            </h1>
+            <p className="body text-espresso-500 mb-8">
+              Stage {call.last_stage}: {stages[call.last_stage - 1].title}
+            </p>
+            <dl className="grid gap-4 md:grid-cols-2 mb-8 p-6 rounded-xl bg-cream-100">
+              <div>
+                <dt className="caption text-espresso-500 mb-1">Prospect</dt>
+                <dd className="font-medium text-espresso-100">{call.prospect_name}</dd>
+              </div>
+              <div>
+                <dt className="caption text-espresso-500 mb-1">Company</dt>
+                <dd className="font-medium text-espresso-100">{call.company}</dd>
+              </div>
+              <div>
+                <dt className="caption text-espresso-500 mb-1">Outcome</dt>
+                <dd className={`font-medium ${call.do_not_call ? "text-red-700" : "text-espresso-100"}`}>
+                  {finalOutcome?.label ?? "Not recorded"}
+                  {call.do_not_call && <span className="ml-2 badge badge--restricted">Restricted</span>}
+                </dd>
+              </div>
+              <div>
+                <dt className="caption text-espresso-500 mb-1">Next step</dt>
+                <dd className="font-medium text-espresso-100">{nextStepText || "None recorded"}</dd>
+              </div>
+            </dl>
+            <section className="mb-8">
+              <h2 className="caption text-espresso-500 mb-2">Stage 5 · Their exact words</h2>
+              <p className="min-h-[6rem] whitespace-pre-wrap rounded-lg border border-espresso-200 bg-white p-4 font-display leading-7 text-espresso-100">
+                {drafts[4].words || "No words recorded."}
+              </p>
+            </section>
+            <p className="mb-6 text-sm text-green-700" role="status">Call saved successfully.</p>
+            <button className="btn btn--primary w-full sm:w-auto" onClick={startAnotherCall} type="button">
+              Start another call
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const currentDraft = drafts[currentStage];
   const suggestion = suggestedOutcome(drafts);
+
+  const closePanel = () => (
+    <div className="p-6 md:p-8 space-y-6">
+      <div>
+        <p className="caption text-ochre-600 mb-1">
+          Closing · stage reached {currentStage + 1} of 8
+        </p>
+        <h1 id="stage-heading" className="heading-2 text-espresso-100">
+          End this call
+        </h1>
+        <p className="mt-2 body text-espresso-500">
+          Choose what actually happened. A document, callback, or
+          referral is a partial outcome, not a success.
+        </p>
+      </div>
+
+      {suggestion && (
+        <div className="rounded-lg border border-ochre-300 bg-ochre-50 p-4">
+          <p className="body-sm text-ochre-900">
+            <strong>Suggested from what you recorded:</strong>{" "}
+            {finalOutcomes.find((item) => item.key === suggestion.outcome)?.label}.{" "}
+            {suggestion.reason}
+          </p>
+        </div>
+      )}
+
+      <fieldset>
+        <legend className="heading-4 text-espresso-100 mb-4">Final outcome</legend>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {finalOutcomes.map((outcome) => {
+            const disabledDnc =
+              outcome.key === "do_not_call" &&
+              drafts[5].outcome !== "asked_not_to_call";
+            const selected = closeOutcome === outcome.key;
+            return (
+              <button
+                key={outcome.key}
+                aria-pressed={selected}
+                disabled={disabledDnc}
+                onClick={() => {
+                  setCloseOutcome(outcome.key);
+                  setNextStep(emptyNextStep());
+                  setCloseError("");
+                }}
+                type="button"
+                className={`p-4 rounded-xl text-left transition-all ${
+                  outcome.className === "restricted"
+                    ? "border-2 border-espresso-300 bg-cream-100 text-espresso-100"
+                    : selected
+                    ? "border-2 border-ochre-500 bg-ochre-50 text-espresso-100"
+                    : "border-2 border-espresso-200 hover:border-ochre-300 hover:bg-cream-50 text-espresso-100"
+                } ${selected && outcome.className === "restricted" ? "ring-2 ring-red-400" : ""} ${disabledDnc ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">{outcome.label}</span>
+                  {outcome.className === "partial" && (
+                    <span className="badge badge--partial">Partial</span>
+                  )}
+                  {outcome.className === "restricted" && (
+                    <span className="badge badge--restricted">Restricted</span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        {drafts[5].outcome !== "asked_not_to_call" && (
+          <p className="mt-3 caption text-espresso-500">
+            Do not call is available only after recording that explicit request at Stage 6.
+          </p>
+        )}
+      </fieldset>
+
+      {closeOutcome &&
+        ["next_step_set", "document_requested", "callback_requested", "referred"].includes(
+          closeOutcome,
+        ) && (
+          <fieldset className="grid gap-4 sm:grid-cols-2 p-6 rounded-xl bg-cream-100">
+            <legend className="heading-4 text-espresso-100">Agreed next step</legend>
+            {closeOutcome === "next_step_set" && (
+              <>
+                <div>
+                  <label className="label">Type</label>
+                  <select
+                    className="input"
+                    onChange={(event) =>
+                      setNextStep({ ...nextStep, type: event.target.value })
+                    }
+                    value={nextStep.type}
+                  >
+                    <option value="">Choose call or meeting</option>
+                    <option value="call">Call</option>
+                    <option value="meeting">Meeting</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">When</label>
+                  <input
+                    className="input"
+                    maxLength={4000}
+                    onChange={(event) =>
+                      setNextStep({ ...nextStep, when: event.target.value })
+                    }
+                    placeholder="Agreed date or time"
+                    value={nextStep.when}
+                  />
+                </div>
+              </>
+            )}
+            {closeOutcome === "callback_requested" && (
+              <div className="sm:col-span-2">
+                <label className="label">Callback time</label>
+                <input
+                  className="input"
+                  maxLength={4000}
+                  onChange={(event) =>
+                    setNextStep({
+                      ...nextStep,
+                      type: "call",
+                      when: event.target.value,
+                    })
+                  }
+                  placeholder="Time they requested"
+                  value={nextStep.when}
+                />
+              </div>
+            )}
+            {closeOutcome === "document_requested" && (
+              <div className="sm:col-span-2">
+                <label className="label">Send via</label>
+                <input
+                  className="input"
+                  maxLength={4000}
+                  onChange={(event) =>
+                    setNextStep({
+                      ...nextStep,
+                      type: "document",
+                      channel: event.target.value,
+                    })
+                  }
+                  placeholder="Agreed communication channel"
+                  value={nextStep.channel}
+                />
+              </div>
+            )}
+            {closeOutcome === "referred" && (
+              <div className="sm:col-span-2">
+                <label className="label">Who were you referred to?</label>
+                <input
+                  className="input"
+                  maxLength={4000}
+                  onChange={(event) =>
+                    setNextStep({
+                      ...nextStep,
+                      type: "referral",
+                      detail: event.target.value,
+                    })
+                  }
+                  placeholder="Name or role they provided"
+                  value={nextStep.detail}
+                />
+              </div>
+            )}
+          </fieldset>
+        )}
+
+      {closeOutcome === "do_not_call" && (
+        <section className="rounded-lg border-2 border-red-300 bg-red-50 p-6">
+          <p className="font-semibold text-red-800 mb-2">Restricted · no further calls</p>
+          <p className="text-sm text-red-700 mb-4">
+            Their exact request must be captured in the Stage 6 words field. No next step is allowed.
+          </p>
+          <p className="whitespace-pre-wrap font-display leading-7 text-red-900 bg-white p-4 rounded-lg border border-red-200 mb-4">
+            {drafts[5].words || "No exact words recorded yet."}
+          </p>
+          {!drafts[5].words.trim() && (
+            <button
+              className="btn btn--secondary btn--sm border-red-400 text-red-700 hover:bg-red-50"
+              onClick={() => {
+                setCloseOpen(false);
+                void goToStage(5);
+              }}
+              type="button"
+            >
+              Return to Stage 6 and record their words
+            </button>
+          )}
+        </section>
+      )}
+
+      <section className="pt-4 border-t border-espresso-200">
+        <h2 className="caption text-espresso-500 mb-2">Stage 5 · Their need, in their words</h2>
+        <p className="min-h-[5rem] whitespace-pre-wrap rounded-lg border border-espresso-200 bg-white p-4 font-display leading-7 text-espresso-100">
+          {drafts[4].words || "No exact words recorded at Stage 5."}
+        </p>
+      </section>
+
+      {closeError && (
+        <div className="rounded-lg bg-red-50 p-4 text-sm text-red-800" role="alert">
+          <p>{closeError}</p>
+          {saveError && (
+            <button
+              className="mt-2 btn btn--ghost btn--sm border-red-300 text-red-700 hover:bg-red-50"
+              onClick={() => {
+                const failedStage = saveStatuses.findIndex((status) => status === "error");
+                void persistStage(failedStage >= 0 ? failedStage : currentStage);
+              }}
+              type="button"
+            >
+              Retry stage save
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-3 pt-4 border-t border-espresso-200">
+        <button
+          className="btn btn--secondary"
+          onClick={() => setCloseOpen(false)}
+          type="button"
+        >
+          Return to Stage {currentStage + 1}
+        </button>
+        <button
+          className="btn btn--primary flex-1 sm:flex-none"
+          disabled={closing || !closeOutcome || (closeOutcome === "do_not_call" && !drafts[5].words.trim())}
+          onClick={() => void saveAndClose()}
+          type="button"
+        >
+          {closing ? "Saving call…" : "Save and end call"}
+        </button>
+      </div>
+    </div>
+  );
+
+  const mainContent = () => (
+    <div>
+      <div className="border-b border-espresso-200 p-6 md:p-8">
+        <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+          <div className="flex-1 min-w-0">
+            <p className="caption text-ochre-600 mb-1">
+              Stage {currentStage + 1} of {stages.length}
+            </p>
+            <h1 id="stage-heading" className="heading-2 text-espresso-100 mb-2">
+              {stages[currentStage].title}
+            </h1>
+            <p className="body text-espresso-500 max-w-2xl">
+              {stages[currentStage].guidance}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              className="btn btn--secondary btn--sm"
+              onClick={openAiSuggest}
+              type="button"
+              disabled={aiAssistLoading}
+              aria-label="Get AI suggestion for this stage"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1" aria-hidden="true">
+                <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"></path>
+                <path d="M12 6v6l4 2"></path>
+              </svg>
+              Suggest what to say
+            </button>
+            {currentStage === 5 && (
+              <button
+                className="btn btn--secondary btn--sm"
+                onClick={openAiObjection}
+                type="button"
+                disabled={aiAssistLoading}
+                aria-label="Get help with objection handling"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <path d="M12 16v-4"></path>
+                  <path d="M12 8h.01"></path>
+                </svg>
+                Objection help
+              </button>
+            )}
+            <button
+              className="btn btn--secondary btn--sm"
+              onClick={openAiSummary}
+              type="button"
+              disabled={aiAssistLoading}
+              aria-label="Generate call summary"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1" aria-hidden="true">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+              </svg>
+              Call summary
+            </button>
+          </div>
+        </div>
+      <div className="p-6 md:p-8 space-y-8">
+        <section aria-labelledby="transcript-examples-heading">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
+            <h2 id="transcript-examples-heading" className="heading-4 text-espresso-100">
+              They may say
+            </h2>
+            <span className="caption text-espresso-500">Verbatim from transcripts · not fabricated</span>
+          </div>
+          <ul className="space-y-3">
+            {transcriptExamples.find((ex) => ex.stage === currentStage + 1)?.quotes.map((quote) => (
+              <li key={quote.callId} className="rounded-lg bg-cream-100 p-4">
+                <p className="font-display italic text-espresso-100 mb-1">&ldquo;{quote.text}&rdquo;</p>
+                <p className="caption text-espresso-500">{quote.callId} · {quote.speaker} · logged: {quote.loggedOutcome}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section aria-labelledby="guidance-heading">
+          <h2 id="guidance-heading" className="heading-4 text-espresso-100 mb-4">Guidance</h2>
+          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {stages[currentStage].prompts.map((prompt) => (
+              <li key={prompt} className="rounded-lg bg-cream-100 p-4 body-sm text-espresso-500">
+                {prompt}
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <fieldset>
+          <legend className="heading-4 text-espresso-100 mb-4">What happened?</legend>
+          <div className="flex flex-wrap gap-2">
+            {stages[currentStage].outcomes.map(([key, label]) => {
+              const selected = currentDraft.outcome === key;
+              const restricted = key === "asked_not_to_call";
+              return (
+                <button
+                  key={key}
+                  aria-pressed={selected}
+                  onClick={() => selectStageOutcome(currentStage, key)}
+                  type="button"
+                  className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                    restricted
+                      ? selected
+                        ? "bg-red-700 text-cream-50 border-2 border-red-700"
+                        : "bg-red-50 text-red-800 border-2 border-red-200 hover:bg-red-100"
+                      : selected
+                      ? "bg-ochre-500 text-espresso-100 border-2 border-ochre-500"
+                      : "bg-white text-espresso-100 border-2 border-espresso-200 hover:border-ochre-300 hover:bg-cream-50"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
+
+        <div className="grid gap-6">
+          <div>
+            <label className="label" htmlFor="prospect-words">
+              {currentStage === 4 ? "What they said they need, in their words" : "Their words"}
+            </label>
+            <textarea
+              className={`textarea ${currentStage === 4 ? "min-h-[10rem]" : ""}`}
+              id="prospect-words"
+              maxLength={4000}
+              onBlur={() => void persistStage(currentStage)}
+              onChange={(event) => setStageDraft(currentStage, { words: event.target.value })}
+              placeholder="Record only what the prospect actually said."
+              value={currentDraft.words}
+            />
+            {currentStage === 4 && !currentDraft.words.trim() && (
+              <p className="mt-2 text-sm text-ochre-700">
+                Exact words are not captured yet. You can continue without them.
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="label" htmlFor="caller-notes">
+              Your note <span className="font-normal text-espresso-500">· caller interpretation or context</span>
+            </label>
+            <textarea
+              className="textarea textarea--caller"
+              id="caller-notes"
+              maxLength={4000}
+              onBlur={() => void persistStage(currentStage)}
+              onChange={(event) => setStageDraft(currentStage, { notes: event.target.value })}
+              placeholder="Keep your note separate from the prospect's words."
+              value={currentDraft.notes}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-xs text-espresso-500" aria-live="polite">
+            <span>
+              {saveStatuses[currentStage] === "saving"
+                ? "Saving…"
+                : saveStatuses[currentStage] === "saved"
+                ? "Saved"
+                : saveStatuses[currentStage] === "error"
+                ? "Not saved"
+                : saveStatuses[currentStage] === "pending"
+                ? "Changes not saved yet"
+                : "No unsaved changes"}
+            </span>
+            {saveStatuses[currentStage] === "error" && (
+              <button
+                className="text-ochre-600 hover:text-ochre-700 underline"
+                onClick={() => void persistStage(currentStage)}
+                type="button"
+              >
+                Retry
+              </button>
+            )}
+            {saveError && <span className="text-red-700">{saveError}</span>}
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t border-espresso-200">
+          <button
+            className="btn btn--secondary w-full sm:w-auto"
+            disabled={currentStage === 0}
+            onClick={() => void goToStage(currentStage - 1)}
+            type="button"
+          >
+            Back
+          </button>
+          <div className="flex flex-col sm:flex-row gap-3 flex-1">
+            <button
+              className="btn btn--secondary w-full sm:w-auto border-espresso-200 text-espresso-100 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
+              onClick={openClosePanel}
+              type="button"
+            >
+              End call
+            </button>
+            {currentStage < stages.length - 1 && (
+              <button
+                className="btn btn--primary w-full sm:w-auto flex-1"
+                onClick={() => void goToStage(currentStage + 1)}
+                type="button"
+              >
+                Next: {stages[currentStage + 1].title}
+              </button>
+            )}
+            {currentStage === stages.length - 1 && (
+              <button
+                className="btn btn--primary w-full sm:w-auto flex-1"
+                onClick={openClosePanel}
+                type="button"
+              >
+                Review and finish
+              </button>
+            )}
+          </div>
+        </div>
+    </div>
+  );
 
   if (loadError && !call) {
     return (
@@ -935,9 +1562,9 @@ function Workspace() {
             </button>
           </div>
         </div>
-      )}
-
-      <div className="container px-4 py-6 md:py-8">
+)}
+ 
+          <div className="container px-4 py-6 md:py-8">
         <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
           <nav
             aria-label="Call stages"
