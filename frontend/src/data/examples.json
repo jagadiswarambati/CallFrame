@@ -1,0 +1,196 @@
+{
+  "examples": [
+    {
+      "stage": 1,
+      "title": "Opening",
+      "quotes": [
+        {
+          "callId": "T027",
+          "speaker": "Reception",
+          "text": "Record your name and reason for calling. I'll see if this person is available.",
+          "loggedOutcome": "no_contact"
+        },
+        {
+          "callId": "T038",
+          "speaker": "Prospect",
+          "text": "I am not in Fairline anymore. I left last year.",
+          "loggedOutcome": "wrong_contact"
+        },
+        {
+          "callId": "T016",
+          "speaker": "Prospect",
+          "text": "See, your voice is cracking up. Can you just write down one number?",
+          "loggedOutcome": "no_contact"
+        }
+      ]
+    },
+    {
+      "stage": 2,
+      "title": "Purpose",
+      "quotes": [
+        {
+          "callId": "T014",
+          "speaker": "Prospect",
+          "text": "Sorry, I didn't get you. You are calling from where?",
+          "loggedOutcome": "wrong_contact"
+        },
+        {
+          "callId": "T007",
+          "speaker": "Prospect",
+          "text": "So what is that regarding? What do I need to help you with in this?",
+          "loggedOutcome": "declined"
+        },
+        {
+          "callId": "T084",
+          "speaker": "Prospect",
+          "text": "Okay, and where did you get my number from?",
+          "loggedOutcome": "do_not_call"
+        }
+      ]
+    },
+    {
+      "stage": 3,
+      "title": "Permission",
+      "quotes": [
+        {
+          "callId": "T005",
+          "speaker": "Prospect",
+          "text": "Can you call me in an hour?",
+          "loggedOutcome": "callback_requested"
+        },
+        {
+          "callId": "T019",
+          "speaker": "Prospect",
+          "text": "It would be better if you can send me on WhatsApp. I will reply to you on WhatsApp.",
+          "loggedOutcome": "document_requested"
+        },
+        {
+          "callId": "T026",
+          "speaker": "Prospect",
+          "text": "I am driving, but I can speak to you. No problem.",
+          "loggedOutcome": "next_step_set"
+        }
+      ]
+    },
+    {
+      "stage": 4,
+      "title": "Their business",
+      "quotes": [
+        {
+          "callId": "T090",
+          "speaker": "Prospect",
+          "text": "We cater more to the steel industry: steel, cement, hydro power, wind.",
+          "loggedOutcome": "document_requested"
+        },
+        {
+          "callId": "T095",
+          "speaker": "Prospect",
+          "text": "...our company majorly works on a job work basis. We are into chemical manufacturing...",
+          "loggedOutcome": "document_requested"
+        },
+        {
+          "callId": "T084",
+          "speaker": "Prospect",
+          "text": "...we are a manufacturing facility here. We have three types of employees.",
+          "loggedOutcome": "do_not_call"
+        }
+      ]
+    },
+    {
+      "stage": 5,
+      "title": "Their need, in their words",
+      "quotes": [
+        {
+          "callId": "T093",
+          "speaker": "Prospect",
+          "text": "Nowadays my customers are more and more into sustainability.",
+          "loggedOutcome": "next_step_set"
+        },
+        {
+          "callId": "T009",
+          "speaker": "Prospect",
+          "text": "We have an internal business model, actually, and we are following it.",
+          "loggedOutcome": "declined"
+        },
+        {
+          "callId": "T084",
+          "speaker": "Prospect",
+          "text": "...How are you going to help me grow my business?",
+          "loggedOutcome": "do_not_call"
+        }
+      ]
+    },
+    {
+      "stage": 6,
+      "title": "Objection",
+      "quotes": [
+        {
+          "callId": "T071",
+          "speaker": "Prospect",
+          "text": "...we have global tie-ups with the big four consulting firms.",
+          "loggedOutcome": "declined"
+        },
+        {
+          "callId": "T024",
+          "speaker": "Prospect",
+          "text": "...I am not the right person to give you the data, because my CFO takes care of all those things.",
+          "loggedOutcome": "referred"
+        },
+        {
+          "callId": "T036",
+          "speaker": "Prospect",
+          "text": "If you can send me some details by mail, it will be helpful.",
+          "loggedOutcome": "document_requested"
+        }
+      ]
+    },
+    {
+      "stage": 7,
+      "title": "Next step",
+      "quotes": [
+        {
+          "callId": "T060",
+          "speaker": "Prospect",
+          "text": "...give me a call sometime on Tuesday morning.",
+          "loggedOutcome": "callback_requested"
+        },
+        {
+          "callId": "T050",
+          "speaker": "Prospect",
+          "text": "...I want you to connect with Mr. Naik. He handles our entire company operations.",
+          "loggedOutcome": "referred"
+        },
+        {
+          "callId": "T019",
+          "speaker": "Prospect",
+          "text": "Then you send me. Then if required, if I feel it is good for me, I will connect.",
+          "loggedOutcome": "document_requested"
+        }
+      ]
+    },
+    {
+      "stage": 8,
+      "title": "Close",
+      "quotes": [
+        {
+          "callId": "T099",
+          "speaker": "Prospect",
+          "text": "...let me understand first whether I'll be able to manage your requirement or not.",
+          "loggedOutcome": "declined"
+        },
+        {
+          "callId": "T098",
+          "speaker": "Prospect",
+          "text": "...due to the re-orgs, I'm not very clear on what role I'll be taking.",
+          "loggedOutcome": "declined"
+        },
+        {
+          "callId": "T088",
+          "speaker": "Prospect",
+          "text": "Sure, sure, sure. Yeah, sure.",
+          "loggedOutcome": "document_requested"
+        }
+      ]
+    }
+  ]
+}
