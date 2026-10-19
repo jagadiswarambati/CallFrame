@@ -6,16 +6,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseError, Pool, type PoolClient } from "pg";
 import {
-  GoogleGenerativeAI,
-  GoogleGenerativeAIAbortError,
-  GoogleGenerativeAIFetchError,
-  HarmCategory,
-  HarmBlockThreshold,
-} from "@google/generative-ai";
+  createRateLimiter,
+  normalizeApiKey,
+  normalizeModel,
+  runAssist,
+  type CallRow,
+  type StageRow,
+} from "./ai";
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const app = express();
+// Render puts one proxy in front of the service; trust it so request.ip is the real client
+// (the AI rate limit is per IP). Do not raise this number unless more proxies are added.
+app.set("trust proxy", 1);
 const port = Number(process.env.PORT ?? 4000);
 const origins = (process.env.FRONTEND_ORIGIN ?? "http://localhost:3000")
   .split(",")
@@ -46,10 +50,6 @@ process.on("unhandledRejection", (reason) => {
 
 // If set, every /api route requires the x-access-code header. Unset or blank = open API.
 const accessCode = process.env.APP_ACCESS_CODE?.trim() || undefined;
-
-const geminiApiKey = process.env.GEMINI_API_KEY;
-const geminiModel = process.env.GEMINI_MODEL ?? "gemini-1.5-flash";
-const genAI = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
 
 const outcomes = new Set([
   "next_step_set",
@@ -643,351 +643,75 @@ app.post("/api/calls/:id/close", async (request, response) => {
 });
 
 // ============================================================
-// GEMINI AI ASSISTANCE ENDPOINTS
+// AI: "Suggest what to say" (the only AI feature). Logic lives in ./ai.ts
 // ============================================================
 
-interface AssistRequest {
-  type: "suggest" | "objection" | "summary";
-  stage?: number;
-  objectionText?: string;
-}
+const allowAssist = createRateLimiter();
 
-interface AssistResponse {
-  suggestion: string;
-  model: string;
-  type: "suggest" | "objection" | "summary";
-}
-
-function buildSuggestPrompt(call: any, stage: number, drafts: any[], stageResults: any[]): string {
-  const stageInfo = stages[stage - 1];
-  const currentDraft = drafts[stage - 1] || { outcome: null, words: "", notes: "" };
-  const stage5Words = drafts[4]?.words || "";
-  
-  let context = `You are an AI assistant helping a caller during a live phone call. The caller is using a structured 8-stage framework.\n\n`;
-  context += `Call Context:\n`;
-  context += `- Prospect: ${call.prospect_name}\n`;
-  context += `- Company: ${call.company}\n`;
-  if (call.prospect_role) context += `- Role: ${call.prospect_role}\n`;
-  context += `\nCurrent Stage: ${stage} - ${stageInfo.title}\n`;
-  context += `Stage Purpose: ${stageInfo.guidance}\n`;
-  context += `\nWhat the caller has recorded so far:\n`;
-  
-  for (let i = 0; i < 8; i++) {
-    const draft = drafts[i];
-    const stageResult = stageResults.find((sr) => sr.stage === i + 1);
-    const latestOutcome = stageResult?.outcome_key || draft.outcome;
-    const latestWords = stageResult?.prospect_words || draft.words;
-    const latestNotes = stageResult?.notes || draft.notes;
-    
-    if (latestOutcome || latestWords || latestNotes) {
-      context += `\nStage ${i + 1} (${stages[i].title}):\n`;
-      if (latestOutcome) context += `  Outcome: ${latestOutcome}\n`;
-      if (latestWords) context += `  Their words: "${latestWords}"\n`;
-      if (latestNotes) context += `  Caller notes: "${latestNotes}"\n`;
-    }
-  }
-  
-  if (stage5Words) {
-    context += `\nStage 5 (Their Need) exact words: "${stage5Words}"\n`;
-  }
-  
-  context += `\nThe caller's offering: "We prepare a free growth report about the prospect's company."\n`;
-  context += `\nRules:\n`;
-  context += `- Provide ONE short, practical line the caller can say next (max 40 words).\n`;
-  context += `- Match the tone to the current stage.\n`;
-  context += `- Do NOT invent facts about the prospect not in the captured text.\n`;
-  context += `- Do NOT make claims about the offering beyond "free growth report".\n`;
-  context += `- If the prospect declined or said they're not the right person, suggest a brief respectful acknowledgement or polite request for the right contact.\n`;
-  context += `- If the prospect asked not to be called, suggest ending politely.\n`;
-  context += `- Output ONLY the suggested line, no explanations.\n`;
-  
-  return context;
-}
-
-function buildObjectionPrompt(call: any, objectionText: string, drafts: any[], stageResults: any[]): string {
-  const stage6Draft = drafts[5] || { outcome: null, words: "", notes: "" };
-  const stage6Result = stageResults.find((sr) => sr.stage === 6);
-  const objectionOutcome = stage6Result?.outcome_key || stage6Draft.outcome;
-  
-  let context = `You are an AI assistant helping a caller handle an objection during a live phone call.\n\n`;
-  context += `Call Context:\n`;
-  context += `- Prospect: ${call.prospect_name}\n`;
-  context += `- Company: ${call.company}\n`;
-  if (call.prospect_role) context += `- Role: ${call.prospect_role}\n`;
-  context += `\nThe prospect raised this objection/concern: "${objectionText}"\n`;
-  if (objectionOutcome) {
-    context += `Recorded outcome at Stage 6: ${objectionOutcome}\n`;
-  }
-  
-  context += `\nThe caller's offering: "We prepare a free growth report about the prospect's company."\n`;
-  context += `\nRules:\n`;
-  context += `- Provide a respectful, professional response to the objection (max 50 words).\n`;
-  context += `- Include ONE clarifying question to understand the prospect better.\n`;
-  context += `- NEVER recommend pressuring someone who has declined or said no.\n`;
-  context += `- If they said "not interested" or "we have a team", acknowledge and ask if there's anything specific they'd like to know.\n`;
-  context += `- If they said "not the right person", ask who the right contact might be.\n`;
-  context += `- If they asked not to be called again, suggest a polite acknowledgment only.\n`;
-  context += `- Do NOT invent facts about the prospect or the offering.\n`;
-  context += `- Output format: "Response: [your response]. Question: [your question]"\n`;
-  
-  return context;
-}
-
-function buildSummaryPrompt(call: any, drafts: any[], stageResults: any[]): string {
-  let context = `Generate a structured call summary for a sales call record. Use ONLY the information provided below. Do not invent or assume anything.\n\n`;
-  context += `Call Metadata:\n`;
-  context += `- Prospect: ${call.prospect_name}\n`;
-  context += `- Company: ${call.company}\n`;
-  if (call.prospect_role) context += `- Role: ${call.prospect_role}\n`;
-  context += `- Started: ${call.started_at}\n`;
-  if (call.ended_at) context += `- Ended: ${call.ended_at}\n`;
-  context += `- Last Stage Reached: ${call.last_stage} (${stages[call.last_stage - 1]?.title})\n`;
-  context += `- Final Outcome: ${call.outcome || "Not recorded"}\n`;
-  if (call.next_step_type) context += `- Next Step Type: ${call.next_step_type}\n`;
-  if (call.next_step_when) context += `- Next Step When: ${call.next_step_when}\n`;
-  if (call.next_step_channel) context += `- Next Step Channel: ${call.next_step_channel}\n`;
-  if (call.next_step_detail) context += `- Next Step Detail: ${call.next_step_detail}\n`;
-  context += `- Do Not Call: ${call.do_not_call ? "Yes" : "No"}\n`;
-  
-  context += `\nStage-by-Stage Details:\n`;
-  
-  for (let i = 0; i < 8; i++) {
-    const draft = drafts[i];
-    const stageResult = stageResults.find((sr) => sr.stage === i + 1);
-    const latestOutcome = stageResult?.outcome_key || draft.outcome;
-    const latestWords = stageResult?.prospect_words || draft.words;
-    const latestNotes = stageResult?.notes || draft.notes;
-    
-    context += `\nStage ${i + 1} (${stages[i].title}):\n`;
-    if (latestOutcome) context += `  Outcome: ${latestOutcome}\n`;
-    else context += `  Outcome: Not recorded\n`;
-    if (latestWords) context += `  Prospect words: "${latestWords}"\n`;
-    else context += `  Prospect words: Not recorded\n`;
-    if (latestNotes) context += `  Caller notes: "${latestNotes}"\n`;
-    else context += `  Caller notes: Not recorded\n`;
-  }
-  
-  context += `\nFormat the summary as follows:\n`;
-  context += `1. PROSPECT STATED NEEDS (exact words from Stage 5, or "Not recorded")\n`;
-  context += `2. CALLER INTERPRETATION (summary of caller notes across stages, or "Not recorded")\n`;
-  context += `3. OBJECTIONS RAISED (from Stage 6, or "None recorded")\n`;
-  context += `4. OUTCOME (final outcome with explanation)\n`;
-  context += `5. NEXT STEP (type, when, channel, detail - or "None agreed")\n`;
-  context += `6. MISSING INFORMATION (list any stages with no data recorded)\n`;
-  context += `\nIf information is missing for any section, explicitly state "Not recorded" rather than inferring.\n`;
-  
-  return context;
-}
-
-const stages = [
-  {
-    title: "Opening",
-    guidance:
-      "Reach the right person, introduce yourself, and listen for contact or availability issues.",
-  },
-  {
-    title: "Purpose",
-    guidance:
-      "Explain why you are calling in one or two clear sentences, then listen for questions or concerns.",
-  },
-  {
-    title: "Permission",
-    guidance:
-      "Capture a clear yes, no, or callback request; silence and an unanswered question are not permission.",
-  },
-  {
-    title: "Their business",
-    guidance:
-      "Understand the prospect's company and work before pitching; listen for their own description and corrections.",
-  },
-  {
-    title: "Their need, in their words",
-    guidance:
-      "Capture the prospect's statement exactly; keep your interpretation and notes in the separate field.",
-  },
-  {
-    title: "Objection",
-    guidance:
-      "Record the reason for hesitation or refusal and respect the prospect's boundary.",
-  },
-  {
-    title: "Next step",
-    guidance:
-      "Record one concrete action the prospect agreed to, including a time or channel where relevant.",
-  },
-  {
-    title: "Close",
-    guidance:
-      "End respectfully and ensure the outcome and next step match what was actually said.",
-  },
-];
-
-// Map Gemini SDK failures by error type / HTTP status (never by message text).
-function sendAiError(response: Response, error: unknown) {
-  if (error instanceof GoogleGenerativeAIAbortError) {
-    sendError(response, 503, "AI_UNAVAILABLE", "AI request timed out. Please try again.");
+function limitAssist(request: Request, response: Response, next: NextFunction) {
+  if (allowAssist(request.ip ?? "unknown")) {
+    next();
     return;
   }
-  if (error instanceof GoogleGenerativeAIFetchError) {
-    if (error.status === 429) {
-      sendError(response, 429, "AI_QUOTA", "AI quota reached for now. Carry on; nothing is lost.");
-      return;
-    }
-    if (error.status === 400 || error.status === 401 || error.status === 403 || error.status === 404) {
-      sendError(response, 502, "AI_CONFIG", "AI assistance is not available. Please check configuration.");
-      return;
-    }
-  }
-  console.error("AI request failed", describeError(error));
-  sendError(response, 503, "AI_UNAVAILABLE", "AI assistance is currently unavailable. Please try again.");
+  sendError(response, 429, "RATE_LIMITED", "Too many AI requests. Wait a minute and try again.");
 }
 
-app.post("/api/calls/:id/assist", async (request, response) => {
+app.post("/api/calls/:id/assist", limitAssist, async (request, response) => {
   if (!pool) {
     sendError(response, 503, "DATABASE_UNAVAILABLE", "The call service is unavailable.");
     return;
   }
-  if (!genAI) {
-    sendError(response, 503, "AI_NOT_CONFIGURED", "AI assistance is not available. GEMINI_API_KEY is not configured.");
-    return;
-  }
-
   if (!isUuid(request.params.id)) {
     sendError(response, 404, "NOT_FOUND", "Call not found.");
     return;
   }
 
-  const body = (request.body ?? {}) as AssistRequest;
-  const { type, stage, objectionText } = body;
-
-  if (!type || !["suggest", "objection", "summary"].includes(type)) {
-    sendError(response, 422, "VALIDATION", "Invalid assist type. Must be 'suggest', 'objection', or 'summary'.", [
-      { field: "type", message: "Required: suggest, objection, or summary" },
-    ]);
-    return;
-  }
-
-  if (type === "suggest" && (!stage || stage < 1 || stage > 8)) {
-    sendError(response, 422, "VALIDATION", "Stage is required for 'suggest' type (1-8).", [
-      { field: "stage", message: "Required for suggest type" },
-    ]);
-    return;
-  }
-
-  if (type === "objection" && !objectionText?.trim()) {
-    sendError(response, 422, "VALIDATION", "Objection text is required for 'objection' type.", [
-      { field: "objectionText", message: "Required for objection type" },
+  const stage = (request.body as { stage?: unknown } | undefined)?.stage;
+  if (typeof stage !== "number" || !Number.isInteger(stage) || stage < 1 || stage > 8) {
+    sendError(response, 422, "VALIDATION", "Stage must be a whole number from 1 to 8.", [
+      { field: "stage", message: "Must be a whole number from 1 to 8." },
     ]);
     return;
   }
 
   try {
-    const [callResult, stageResult] = await Promise.all([
-      pool.query("SELECT * FROM calls WHERE id = $1", [request.params.id]),
-      pool.query(
-        `SELECT id, call_id, stage, revision, outcome_key, prospect_words, notes, created_at
-         FROM stage_results WHERE call_id = $1 ORDER BY stage, revision DESC`,
-        [request.params.id],
-      ),
-    ]);
-    if (!callResult.rowCount) {
-      sendError(response, 404, "NOT_FOUND", "Call not found.");
-      return;
-    }
-
-    const call = callResult.rows[0];
-    const stageResults = stageResult.rows;
-
-    // Check DNC block for suggestions
-    if (type === "suggest") {
-      const dncCheck = await pool.query(
-        `SELECT outcome_key FROM stage_results
-         WHERE call_id = $1 AND stage = 6
-         ORDER BY revision DESC LIMIT 1`,
-        [request.params.id],
-      );
-      const latestDnc = dncCheck.rows[0];
-      if (latestDnc?.outcome_key === "asked_not_to_call") {
-        response.json({
-          suggestion: "They asked not to be called. End the call politely.",
-          model: geminiModel,
-          type: "suggest",
-          blocked: true,
-        });
-        return;
-      }
-    }
-
-    // Build drafts from latest stage results
-    const drafts = stages.map(() => ({ outcome: null, words: "", notes: "" }));
-    for (const sr of stageResults) {
-      const idx = sr.stage - 1;
-      if (idx >= 0 && idx < 8 && !drafts[idx].outcome) {
-        drafts[idx] = {
-          outcome: sr.outcome_key,
-          words: sr.prospect_words,
-          notes: sr.notes,
-        };
-      }
-    }
-
-    let prompt: string;
-    switch (type) {
-      case "suggest":
-        prompt = buildSuggestPrompt(call, stage!, drafts, stageResults);
-        break;
-      case "objection":
-        prompt = buildObjectionPrompt(call, objectionText!, drafts, stageResults);
-        break;
-      case "summary":
-        prompt = buildSummaryPrompt(call, drafts, stageResults);
-        break;
-    }
-
-    const model = genAI.getGenerativeModel({
-      model: geminiModel,
-      safetySettings: [
-        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-      ],
-      generationConfig: {
-        temperature: 0.3,
-        maxOutputTokens: 200,
+    // Context always comes from the database, never from the request body.
+    const result = await runAssist(
+      {
+        loadCall: async (id) =>
+          (
+            await pool.query<CallRow>(
+              "SELECT id, prospect_name, company, prospect_role, do_not_call FROM calls WHERE id = $1",
+              [id],
+            )
+          ).rows[0],
+        loadStageRows: async (id) =>
+          (
+            await pool.query<StageRow>(
+              `SELECT stage, revision, outcome_key, prospect_words, notes
+               FROM stage_results WHERE call_id = $1 ORDER BY stage, revision DESC`,
+              [id],
+            )
+          ).rows,
+        saveSuggestion: async ({ callId, stage: savedStage, model, text }) =>
+          (
+            await pool.query<{ id: string }>(
+              `INSERT INTO ai_suggestions (call_id, stage, model, suggestion)
+               VALUES ($1, $2, $3, $4) RETURNING id`,
+              [callId, savedStage, model, text],
+            )
+          ).rows[0],
+        model: normalizeModel(process.env.GEMINI_MODEL),
+        apiKey: normalizeApiKey(process.env.GEMINI_API_KEY),
       },
-    });
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 9000);
-
-    let suggestion: string;
-    try {
-      const result = await model.generateContent(prompt, { signal: controller.signal });
-      suggestion = result.response.text().trim();
-      if (!suggestion) {
-        throw new Error("Empty response from model");
-      }
-    } catch (error) {
-      sendAiError(response, error);
-      return;
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    // Store AI suggestion in database (a failure here is a database error, not an AI error)
-    const assistStage = type === "suggest" ? stage! : (type === "objection" ? 6 : 8);
-    await pool.query(
-      `INSERT INTO ai_suggestions (call_id, stage, model, suggestion)
-       VALUES ($1, $2, $3, $4)`,
-      [request.params.id, assistStage, geminiModel, suggestion],
+      request.params.id,
+      stage,
     );
-
-    response.json({
-      suggestion,
-      model: geminiModel,
-      type,
-    });
+    if (result.status >= 400) {
+      const code = (result.body as { error?: { code?: string } }).error?.code;
+      if (code?.startsWith("AI_")) console.error("AI request failed", { code });
+    }
+    response.status(result.status).json(result.body);
   } catch (error) {
     handleError(response, error, "AI assistance could not be completed. Please retry.");
   }
