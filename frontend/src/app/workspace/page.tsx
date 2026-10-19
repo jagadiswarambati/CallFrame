@@ -300,12 +300,12 @@ function Workspace() {
     }
     return true;
   });
-  const [aiAssistOpen, setAiAssistOpen] = useState(false);
-  const [aiAssistType, setAiAssistType] = useState<"suggest" | "objection" | "summary">("suggest");
-  const [aiAssistLoading, setAiAssistLoading] = useState(false);
-  const [aiAssistError, setAiAssistError] = useState("");
-  const [aiAssistResult, setAiAssistResult] = useState("");
-  const [aiObjectionText, setAiObjectionText] = useState("");
+  // "Suggest what to say" (the only AI feature). Results are keyed by stage so a late reply
+  // for another stage is never shown here. None of this state is read by saving, Next or close.
+  const [aiLoadingStage, setAiLoadingStage] = useState<number | null>(null);
+  const [aiResult, setAiResult] = useState<{ stage: number; text: string; model: string } | null>(null);
+  const [aiError, setAiError] = useState<{ stage: number; message: string } | null>(null);
+  const [aiBlockedCallId, setAiBlockedCallId] = useState<string | null>(null);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const debounceTimer = useRef<number | null>(null);
   const warmupTimer = useRef<number | null>(null);
@@ -618,72 +618,43 @@ function Workspace() {
     }
   };
 
-  const requestAiAssist = async (type: "suggest" | "objection" | "summary", extra?: { stage?: number; objectionText?: string }) => {
-    if (!call) return;
-    setAiAssistLoading(true);
-    setAiAssistError("");
-    setAiAssistResult("");
+  const suggestWhatToSay = async () => {
+    if (!call || aiLoadingStage !== null) return;
+    const stageIndex = currentStage;
+    setAiLoadingStage(stageIndex);
+    setAiError(null);
+    setAiResult(null);
     try {
-      const response = await apiRequest<{ suggestion: string; model: string; type: string; blocked?: boolean }>(
-        `/api/calls/${encodeURIComponent(call.id)}/assist`,
-        {
-          method: "POST",
-          body: JSON.stringify({ type, ...extra }),
-        },
-      );
+      // The server reads only saved text, so save this stage first. If that save fails the
+      // normal save-error UI shows it, and the request below still runs against what is saved.
+      await persistStage(stageIndex);
+      const response = await apiRequest<{
+        blocked?: boolean;
+        message?: string;
+        suggestion?: { text: string; model: string };
+      }>(`/api/calls/${encodeURIComponent(call.id)}/assist`, {
+        method: "POST",
+        body: JSON.stringify({ stage: stageIndex + 1 }),
+      });
       if (response.blocked) {
-        setAiAssistResult("AI assistance is blocked because the prospect asked not to be called again.");
+        setAiBlockedCallId(call.id);
+      } else if (response.suggestion?.text) {
+        setAiResult({ stage: stageIndex, text: response.suggestion.text, model: response.suggestion.model });
       } else {
-        setAiAssistResult(response.suggestion);
+        throw new Error("The AI suggestion was empty. Try again.");
       }
     } catch (error) {
-      setAiAssistError(
-        error instanceof Error
-          ? error.message
-          : "AI assistance failed. Please try again.",
-      );
+      const status = (error as ApiError).status;
+      setAiError({
+        stage: stageIndex,
+        message:
+          status !== undefined && error instanceof Error
+            ? error.message
+            : "The AI suggestion is unavailable right now. Nothing else is affected.",
+      });
     } finally {
-      setAiAssistLoading(false);
+      setAiLoadingStage(null);
     }
-  };
-
-  const openAiSuggest = () => {
-    setAiAssistType("suggest");
-    setAiAssistOpen(true);
-    setAiAssistResult("");
-    setAiAssistError("");
-    void requestAiAssist("suggest", { stage: currentStage + 1 });
-  };
-
-  const openAiObjection = () => {
-    setAiAssistType("objection");
-    setAiAssistOpen(true);
-    setAiAssistResult("");
-    setAiAssistError("");
-    setAiObjectionText(drafts[5]?.words || "");
-  };
-
-  const requestAiObjection = () => {
-    if (!aiObjectionText.trim()) {
-      setAiAssistError("Enter the objection or concern first.");
-      return;
-    }
-    void requestAiAssist("objection", { objectionText: aiObjectionText });
-  };
-
-  const openAiSummary = () => {
-    setAiAssistType("summary");
-    setAiAssistOpen(true);
-    setAiAssistResult("");
-    setAiAssistError("");
-    void requestAiAssist("summary");
-  };
-
-  const closeAiAssist = () => {
-    setAiAssistOpen(false);
-    setAiAssistResult("");
-    setAiAssistError("");
-    setAiObjectionText("");
   };
 
   const retryLoad = () => {
@@ -711,6 +682,16 @@ function Workspace() {
   };
 
   const currentDraft = drafts[currentStage];
+  const hasCapturedThisStage = Boolean(
+    currentDraft.outcome || currentDraft.words.trim() || currentDraft.notes.trim(),
+  );
+  // Mirrors the server's hard block (the server still decides): any do-not-call signal on this call.
+  const aiBlocked = Boolean(
+    call &&
+      (call.do_not_call ||
+        aiBlockedCallId === call.id ||
+        drafts.some((draft) => draft.outcome === "asked_not_to_call")),
+  );
   const suggestion = suggestedOutcome(drafts);
 
   const closePanel = (
@@ -962,53 +943,6 @@ function Workspace() {
               {stages[currentStage].guidance}
             </p>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <button
-              className="btn btn--secondary btn--sm"
-              onClick={openAiSuggest}
-              type="button"
-              disabled={aiAssistLoading}
-              aria-label="Get AI suggestion for this stage"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1" aria-hidden="true">
-                <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"></path>
-                <path d="M12 6v6l4 2"></path>
-              </svg>
-              Suggest what to say
-            </button>
-            {currentStage === 5 && (
-              <button
-                className="btn btn--secondary btn--sm"
-                onClick={openAiObjection}
-                type="button"
-                disabled={aiAssistLoading}
-                aria-label="Get help with objection handling"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1" aria-hidden="true">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <path d="M12 16v-4"></path>
-                  <path d="M12 8h.01"></path>
-                </svg>
-                Objection help
-              </button>
-            )}
-            <button
-              className="btn btn--secondary btn--sm"
-              onClick={openAiSummary}
-              type="button"
-              disabled={aiAssistLoading}
-              aria-label="Generate call summary"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1" aria-hidden="true">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <line x1="16" y1="13" x2="8" y2="13"></line>
-                <line x1="16" y1="17" x2="8" y2="17"></line>
-                <polyline points="10 9 9 9 8 9"></polyline>
-              </svg>
-              Call summary
-            </button>
-          </div>
         </div>
       </div>
       <div className="p-6 md:p-8 space-y-8">
@@ -1103,6 +1037,46 @@ function Workspace() {
               value={currentDraft.notes}
             />
           </div>
+          <section aria-labelledby="ai-suggest-heading" className="grid gap-3">
+            <h2 id="ai-suggest-heading" className="sr-only">AI suggestion</h2>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                className="btn btn--secondary btn--sm"
+                disabled={aiLoadingStage !== null || aiBlocked || !hasCapturedThisStage}
+                onClick={() => void suggestWhatToSay()}
+                type="button"
+              >
+                {aiLoadingStage === currentStage ? "Thinking…" : "Suggest what to say"}
+              </button>
+              {aiBlocked ? (
+                <p className="text-sm text-red-800" id="ai-suggest-note">
+                  They asked not to be called. End the call politely. AI suggestions are switched off for this call.
+                </p>
+              ) : !hasCapturedThisStage ? (
+                <p className="text-sm text-espresso-500" id="ai-suggest-note">
+                  Tap a button or write something at this stage first. Optional: you can carry on without it.
+                </p>
+              ) : (
+                <p className="text-sm text-espresso-500" id="ai-suggest-note">
+                  Optional. Never filled in for you; never changes the prospect&apos;s words.
+                </p>
+              )}
+            </div>
+            {aiError && aiError.stage === currentStage && (
+              <p className="text-sm text-red-800 bg-red-50 rounded-lg p-3" role="alert">
+                {aiError.message}
+              </p>
+            )}
+            {aiResult && aiResult.stage === currentStage && (
+              <div className="rounded-lg border border-dashed border-ochre-500 bg-ochre-50 p-4" role="status">
+                <p className="caption text-ochre-700 font-semibold mb-2">
+                  AI suggestion, not the prospect&apos;s words
+                  <span className="ml-2 font-normal text-espresso-500">· {aiResult.model}</span>
+                </p>
+                <p className="body text-espresso-100 whitespace-pre-wrap">{aiResult.text}</p>
+              </div>
+            )}
+          </section>
           <div className="flex flex-wrap items-center gap-3 text-xs text-espresso-500" aria-live="polite">
             <span>
               {saveStatuses[currentStage] === "saving"
@@ -1451,151 +1425,6 @@ function Workspace() {
       </div>
     </div>
 
-    {aiAssistOpen && (
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm"
-        onClick={closeAiAssist}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="ai-assist-title"
-      >
-        <div
-          className="w-full max-w-2xl bg-white rounded-2xl shadow-xl overflow-hidden animate-fade-in"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between p-4 border-b border-espresso-200">
-            <h2 id="ai-assist-title" className="heading-4 text-espresso-100">
-              {aiAssistType === "suggest"
-                ? "Suggest what to say"
-                : aiAssistType === "objection"
-                ? "Objection assistance"
-                : "Call summary"}
-            </h2>
-            <button
-              className="btn btn--ghost btn--sm text-espresso-500 hover:text-espresso-100"
-              onClick={closeAiAssist}
-              type="button"
-              aria-label="Close AI assistant"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </svg>
-            </button>
-          </div>
-
-          <div className="p-4 max-h-[60vh] overflow-y-auto">
-            {aiAssistType === "objection" && (
-              <div className="space-y-4">
-                <p className="body-sm text-espresso-500">
-                  Enter the prospect&apos;s objection or concern, then click &quot;Get assistance&quot; for a respectful response and a clarifying question.
-                </p>
-                <div>
-                  <label className="label" htmlFor="ai-objection-text">Objection / concern</label>
-                  <textarea
-                    id="ai-objection-text"
-                    className="textarea min-h-[8rem]"
-                    maxLength={4000}
-                    placeholder='e.g., "We already have a consulting firm" or "Not interested right now"'
-                    value={aiObjectionText}
-                    onChange={(e) => setAiObjectionText(e.target.value)}
-                  />
-                </div>
-                {aiAssistError && (
-                  <p className="text-sm text-red-700 bg-red-50 p-3 rounded-lg" role="alert">{aiAssistError}</p>
-                )}
-                <div className="flex gap-3 pt-2">
-                  <button
-                    className="btn btn--primary flex-1"
-                    onClick={requestAiObjection}
-                    disabled={aiAssistLoading || !aiObjectionText.trim()}
-                    type="button"
-                  >
-                    {aiAssistLoading ? "Getting assistance…" : "Get assistance"}
-                  </button>
-                  <button
-                    className="btn btn--secondary"
-                    onClick={closeAiAssist}
-                    type="button"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {aiAssistType === "summary" && aiAssistLoading && (
-              <div className="flex flex-col items-center gap-4 py-8">
-                <div className="h-8 w-8 animate-spin rounded-full border-2 border-ochre-500 border-t-transparent" aria-hidden="true" />
-                <p className="text-espresso-500">Generating call summary…</p>
-              </div>
-            )}
-
-            {(aiAssistType === "suggest" || aiAssistType === "objection" || aiAssistType === "summary") && aiAssistResult && !aiAssistLoading && (
-              <div className="space-y-4">
-                <div className="rounded-lg bg-ochre-50 border border-ochre-200 p-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-ochre-600" aria-hidden="true">
-                      <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"></path>
-                      <path d="M12 6v6l4 2"></path>
-                    </svg>
-                    <span className="caption text-ochre-700 font-semibold">AI suggestion</span>
-                    <span className="ml-auto badge badge--partial text-xs">Gemini: {aiAssistType}</span>
-                  </div>
-                  <p className="body text-espresso-100 whitespace-pre-wrap font-display">{aiAssistResult}</p>
-                </div>
-                <p className="caption text-espresso-500">
-                  This is an AI-generated suggestion. Review before using. It does not replace your judgment.
-                </p>
-                <div className="flex gap-3 pt-2">
-                  <button
-                    className="btn btn--primary flex-1"
-                    onClick={closeAiAssist}
-                    type="button"
-                  >
-                    Done
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {(aiAssistType === "suggest" || aiAssistType === "summary") && !aiAssistResult && !aiAssistLoading && (
-              <div className="flex flex-col items-center gap-4 py-8">
-                <div className="h-8 w-8 animate-spin rounded-full border-2 border-ochre-500 border-t-transparent" aria-hidden="true" />
-                <p className="text-espresso-500">
-                  {aiAssistType === "suggest" ? "Generating suggestion…" : "Generating call summary…"}
-                </p>
-              </div>
-            )}
-
-            {aiAssistError && !aiAssistLoading && (
-              <div className="rounded-lg bg-red-50 border border-red-200 p-4">
-                <p className="text-sm text-red-800" role="alert">{aiAssistError}</p>
-                <div className="flex gap-3 mt-3">
-                  <button
-                    className="btn btn--primary flex-1"
-                    onClick={() => {
-                      if (aiAssistType === "suggest") void requestAiAssist("suggest", { stage: currentStage + 1 });
-                      else if (aiAssistType === "summary") void requestAiAssist("summary");
-                    }}
-                    type="button"
-                  >
-                    Retry
-                  </button>
-                  <button
-                    className="btn btn--secondary flex-1"
-                    onClick={closeAiAssist}
-                    type="button"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    )}
     </>
   );
 }
