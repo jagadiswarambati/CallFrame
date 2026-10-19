@@ -4,6 +4,10 @@
 
 export const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000").replace(/\/$/, "");
 
+// Default timeout for mutating requests (POST/PUT/PATCH). GET requests use the browser default
+// because they are retried and the user is not blocked by them.
+export const MUTATING_TIMEOUT_MS = 12_000;
+
 export const ACCESS_CODE_STORAGE_KEY = "callframe.accessCode";
 
 export type FieldError = { field: string; message: string };
@@ -88,18 +92,35 @@ async function requestOnce<T>(path: string, init: RequestInit): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body !== undefined && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (accessCode) headers.set("x-access-code", accessCode);
-  const request: RequestInit = { ...init, headers };
 
-  // One retry, and only when the request never got an HTTP answer (network error)
-  // and cannot change data. HTTP errors (4xx/5xx) are never retried.
   const method = (init.method ?? "GET").toUpperCase();
   const mayRetry = method === "GET" || method === "HEAD";
+
+  // Mutating requests get a hard timeout so a dropped connection never leaves the UI stuck.
+  // GET/HEAD are not timed out here because they are retried on network error and the caller
+  // can pass its own AbortSignal (e.g. from an AbortController in a useEffect cleanup).
+  let signal = init.signal ?? undefined;
+  if (!mayRetry && !signal) {
+    signal = AbortSignal.timeout(MUTATING_TIMEOUT_MS);
+  }
+
+  const request: RequestInit = { ...init, headers, signal };
 
   let response: Response;
   try {
     response = await fetch(`${apiUrl}${path}`, request);
   } catch (firstError) {
-    if (isAbort(firstError)) throw firstError;
+    if (isAbort(firstError)) {
+      // Distinguish a user-initiated abort from a timeout so callers can show different messages.
+      const isTimeout = firstError instanceof DOMException && firstError.name === "TimeoutError";
+      throw new ApiError(
+        0,
+        isTimeout ? "TIMEOUT" : "ABORTED",
+        isTimeout
+          ? "The request timed out. Check your connection and retry."
+          : NETWORK_MESSAGE,
+      );
+    }
     if (!mayRetry) throw new ApiError(0, "NETWORK", NETWORK_MESSAGE);
     try {
       response = await fetch(`${apiUrl}${path}`, request);
@@ -156,5 +177,5 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 }
 
 function isAbort(error: unknown) {
-  return error instanceof DOMException && error.name === "AbortError";
+  return error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError");
 }
