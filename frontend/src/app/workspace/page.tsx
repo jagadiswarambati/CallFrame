@@ -710,183 +710,10 @@ function Workspace() {
     setSaveError("");
   };
 
-  // Early returns - must come before JSX variable definitions to avoid parsing issues
-  if (loadError && !call) {
-    return (
-      <div className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-4">
-        <div className="card p-8 max-w-lg w-full text-center">
-          <h1 className="heading-3 text-espresso-100 mb-3">Could not restore the call</h1>
-          <p className="body text-espresso-500 mb-6" role="alert">{loadError}</p>
-          <button className="btn btn--primary" onClick={retryLoad} type="button">
-            Retry loading
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (!call) {
-    return (
-      <div className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-4">
-        <div className="card p-8 md:p-12 max-w-xl w-full">
-          <Link href="/" className="logo flex items-center gap-3 mb-6 inline-block" aria-label="Callframe Home">
-            <span className="logo-mark" aria-hidden="true">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
-              </svg>
-            </span>
-            <span>Callframe</span>
-          </Link>
-          <h1 className="heading-2 text-espresso-100 mb-3">Start a call</h1>
-          <p className="body-lg text-espresso-500 mb-8">Keep the conversation clear, record what was actually said, and capture an honest next step.</p>
-          {loading && (
-            <p className="mb-6 p-3 rounded-lg bg-ochre-50 text-sm text-ochre-800" role="status">
-              Restoring a saved call or waiting for the service…
-            </p>
-          )}
-          {!serverReady && (
-            <div className="mb-6 rounded-lg bg-ochre-50 border border-ochre-200 p-4" role="status">
-              <p className="font-semibold text-ochre-800">Warming up the server…</p>
-              <p className="mt-1 text-sm text-ochre-700">
-                The API is starting (cold start on free tier). This may take up to a minute.
-                We&apos;ll retry automatically.
-              </p>
-              <div className="mt-2 h-2 w-full bg-ochre-100 rounded-full overflow-hidden">
-                <div
-                  className={`h-full bg-ochre-500 ${reduceMotion ? "" : "animate-pulse"}`}
-                  style={{ width: "100%" }}
-                />
-              </div>
-            </div>
-          )}
-          <form className="space-y-5" onSubmit={startCall}>
-            <div>
-              <label className="label" htmlFor="prospect-name">Prospect name</label>
-              <input
-                autoComplete="name"
-                className="input"
-                id="prospect-name"
-                maxLength={4000}
-                onChange={(event) => setProspectName(event.target.value)}
-                required
-                value={prospectName}
-              />
-            </div>
-            <div>
-              <label className="label" htmlFor="company">Company</label>
-              <input
-                autoComplete="organization"
-                className="input"
-                id="company"
-                maxLength={4000}
-                onChange={(event) => setCompany(event.target.value)}
-                required
-                value={company}
-              />
-            </div>
-            <div>
-              <label className="label" htmlFor="prospect-role">
-                Role <span className="font-normal text-espresso-500">· optional</span>
-              </label>
-              <input
-                className="input"
-                id="prospect-role"
-                maxLength={4000}
-                onChange={(event) => setRole(event.target.value)}
-                value={role}
-              />
-            </div>
-            {startError && (
-              <p className="rounded-lg bg-red-50 p-3 text-sm leading-6 text-red-800" role="alert">
-                {startError}
-              </p>
-            )}
-            <button
-              className="btn btn--primary btn--lg w-full"
-              disabled={loading || !serverReady}
-              type="submit"
-            >
-              {loading ? "Starting…" : !serverReady ? "Warming up server…" : "Start call"}
-            </button>
-          </form>
-          <p className="mt-4 caption text-espresso-500">
-            Call details are sent to the backend for saving. If saving fails, the form stays filled so you can retry.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (call.status !== "in_progress") {
-    const finalOutcome = finalOutcomes.find((item) => item.key === call.outcome);
-    const nextStepText = [
-      call.next_step_type,
-      call.next_step_when,
-      call.next_step_channel,
-      call.next_step_detail,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-
-    return (
-      <div className="min-h-[calc(100vh-8rem)] px-4 py-12">
-        <div className="max-w-2xl mx-auto">
-          <div className="card p-8">
-            <Link href="/" className="logo flex items-center gap-3 mb-6 inline-block" aria-label="Callframe Home">
-              <span className="logo-mark" aria-hidden="true">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
-                </svg>
-              </span>
-              <span>Callframe</span>
-            </Link>
-            <h1 className="heading-2 text-espresso-100 mb-2">
-              {call.status === "completed" ? "Call completed" : "Call ended early"}
-            </h1>
-            <p className="body text-espresso-500 mb-8">
-              Stage {call.last_stage}: {stages[call.last_stage - 1].title}
-            </p>
-            <dl className="grid gap-4 md:grid-cols-2 mb-8 p-6 rounded-xl bg-cream-100">
-              <div>
-                <dt className="caption text-espresso-500 mb-1">Prospect</dt>
-                <dd className="font-medium text-espresso-100">{call.prospect_name}</dd>
-              </div>
-              <div>
-                <dt className="caption text-espresso-500 mb-1">Company</dt>
-                <dd className="font-medium text-espresso-100">{call.company}</dd>
-              </div>
-              <div>
-                <dt className="caption text-espresso-500 mb-1">Outcome</dt>
-                <dd className={`font-medium ${call.do_not_call ? "text-red-700" : "text-espresso-100"}`}>
-                  {finalOutcome?.label ?? "Not recorded"}
-                  {call.do_not_call && <span className="ml-2 badge badge--restricted">Restricted</span>}
-                </dd>
-              </div>
-              <div>
-                <dt className="caption text-espresso-500 mb-1">Next step</dt>
-                <dd className="font-medium text-espresso-100">{nextStepText || "None recorded"}</dd>
-              </div>
-            </dl>
-            <section className="mb-8">
-              <h2 className="caption text-espresso-500 mb-2">Stage 5 · Their exact words</h2>
-              <p className="min-h-[6rem] whitespace-pre-wrap rounded-lg border border-espresso-200 bg-white p-4 font-display leading-7 text-espresso-100">
-                {drafts[4].words || "No words recorded."}
-              </p>
-            </section>
-            <p className="mb-6 text-sm text-green-700" role="status">Call saved successfully.</p>
-            <button className="btn btn--primary w-full sm:w-auto" onClick={startAnotherCall} type="button">
-              Start another call
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const currentDraft = drafts[currentStage];
   const suggestion = suggestedOutcome(drafts);
 
-  const closePanel = () => (
+  const closePanel = (
     <div className="p-6 md:p-8 space-y-6">
       <div>
         <p className="caption text-ochre-600 mb-1">
@@ -1120,7 +947,7 @@ function Workspace() {
     </div>
   );
 
-  const mainContent = () => (
+  const mainContent = (
     <div>
       <div className="border-b border-espresso-200 p-6 md:p-8">
         <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
@@ -1183,6 +1010,7 @@ function Workspace() {
             </button>
           </div>
         </div>
+      </div>
       <div className="p-6 md:p-8 space-y-8">
         <section aria-labelledby="transcript-examples-heading">
           <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
@@ -1337,6 +1165,7 @@ function Workspace() {
             )}
           </div>
         </div>
+      </div>
     </div>
   );
 
@@ -1513,6 +1342,7 @@ function Workspace() {
   }
 
   return (
+    <>
     <div className="min-h-[calc(100vh-8rem)] bg-cream-50">
       <header className="border-b border-espresso-200 bg-white sticky top-16 z-40">
         <div className="container flex flex-wrap items-center justify-between gap-4 py-3 md:py-4">
@@ -1614,8 +1444,9 @@ function Workspace() {
             </ol>
           </nav>
 
-{mainContent}
-              </section>
+          <section className="card overflow-hidden">
+            {closeOpen ? closePanel : mainContent}
+          </section>
         </div>
       </div>
     </div>
@@ -1657,7 +1488,7 @@ function Workspace() {
             {aiAssistType === "objection" && (
               <div className="space-y-4">
                 <p className="body-sm text-espresso-500">
-                  Enter the prospect's objection or concern, then click "Get assistance" for a respectful response and a clarifying question.
+                  Enter the prospect&apos;s objection or concern, then click &quot;Get assistance&quot; for a respectful response and a clarifying question.
                 </p>
                 <div>
                   <label className="label" htmlFor="ai-objection-text">Objection / concern</label>
@@ -1665,7 +1496,7 @@ function Workspace() {
                     id="ai-objection-text"
                     className="textarea min-h-[8rem]"
                     maxLength={4000}
-                    placeholder="e.g., \"We already have a consulting firm\" or \"Not interested right now\""
+                    placeholder='e.g., "We already have a consulting firm" or "Not interested right now"'
                     value={aiObjectionText}
                     onChange={(e) => setAiObjectionText(e.target.value)}
                   />
@@ -1765,6 +1596,7 @@ function Workspace() {
         </div>
       </div>
     )}
+    </>
   );
 }
 
