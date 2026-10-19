@@ -116,18 +116,18 @@ const features = [
     items: [
       {
         title: "On-Demand Suggestions",
-        description: "Click 'Suggest what to say' at any stage. Sends context (stage, outcome, prospect words, notes) to Gemini. Returns one short spoken line.",
-        status: "planned",
+        description: "Click 'Suggest what to say' at any stage. Sends the current stage context (outcome, words, notes) to Gemini. Returns one short spoken line of at most 40 words.",
+        status: "implemented",
       },
       {
         title: "Safety Controls",
-        description: "Prospect words passed as delimited data. Hard block on Do Not Call calls. Rate limited. Labelled 'AI suggestion, not the prospect's words'.",
-        status: "planned",
+        description: "Prospect words are passed as delimited data, not free instructions. Hard block on Do Not Call calls. Rate-limited. Suggestion is clearly labelled 'AI suggestion, not the prospect's words'.",
+        status: "implemented",
       },
       {
         title: "No Auto-Insertion",
-        description: "AI text never writes to prospect words or caller notes. Stored separately in ai_suggestions table.",
-        status: "planned",
+        description: "AI text never writes to prospect words or caller notes. Results are stored separately in the ai_suggestions table and shown in call history.",
+        status: "implemented",
       },
     ],
   },
@@ -166,7 +166,14 @@ const features = [
       },
     ],
   },
-] as const;
+] satisfies Array<{
+  category: string;
+  items: ReadonlyArray<{
+    title: string;
+    description: string;
+    status: "implemented" | "planned";
+  }>;
+}>;
 
 const notImplemented = [
   "Live transcription or audio recording",
@@ -204,22 +211,25 @@ export default function FeaturesPage() {
                   <h2 className="heading-2 text-cream-50">{group.category}</h2>
                 </header>
                 <div className="grid gap-6 md:grid-cols-2">
-                  {group.items.map((feature) => (
-                    <article
-                      key={feature.title}
-                      className={`card--dark p-6 relative ${feature.status === "planned" ? "opacity-70" : ""}`}
-                    >
-                      {feature.status === "planned" && (
-                        <span className="absolute -top-2 right-2 badge badge--partial text-xs">Planned</span>
-                      )}
-                      <h3 className="heading-4 text-cream-50 mb-2">{feature.title}</h3>
-                      <p className="body text-espresso-700">{feature.description}</p>
-                      <div className="mt-4 flex items-center gap-2">
-                        <span className={`w-2 h-2 rounded-full ${feature.status === "implemented" ? "bg-green-500" : "bg-ochre-500"}`} />
-                        <span className="caption text-espresso-500 capitalize">{feature.status}</span>
-                      </div>
-                    </article>
-                  ))}
+                  {group.items.map((feature) => {
+                    const isPlanned = (feature.status as string) === "planned";
+                    return (
+                      <article
+                        key={feature.title}
+                        className={`card--dark p-6 relative ${isPlanned ? "opacity-70" : ""}`}
+                      >
+                        {isPlanned && (
+                          <span className="absolute -top-2 right-2 badge badge--partial text-xs">Planned</span>
+                        )}
+                        <h3 className="heading-4 text-cream-50 mb-2">{feature.title}</h3>
+                        <p className="body text-espresso-700">{feature.description}</p>
+                        <div className="mt-4 flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${!isPlanned ? "bg-green-500" : "bg-ochre-500"}`} />
+                          <span className="caption text-espresso-500 capitalize">{feature.status}</span>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
             ))}
