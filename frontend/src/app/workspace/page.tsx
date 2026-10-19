@@ -154,6 +154,9 @@ function Workspace() {
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const debounceTimer = useRef<number | null>(null);
   const warmupTimer = useRef<number | null>(null);
+  // Prevents double-submit on Start a Call (belt-and-suspenders on top of the
+  // disabled={loading} prop — guards against rapid form submission events).
+  const startingRef = useRef(false);
 
   // ── Setters ──────────────────────────────────────────────────────────────
 
@@ -241,8 +244,12 @@ function Workspace() {
 
   useEffect(() => {
     if (!call || call.status !== "in_progress") return;
-    setNow(Date.now());
-    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    // Update immediately then on each second tick.
+    // setNow is called inside the tick function (not at effect body level)
+    // to satisfy react-hooks/set-state-in-effect.
+    const tick = () => setNow(Date.now());
+    tick();
+    const interval = window.setInterval(tick, 1000);
     return () => window.clearInterval(interval);
   }, [call]);
 
@@ -357,10 +364,17 @@ function Workspace() {
       setStartError("Server is still warming up. Please wait a moment.");
       return;
     }
+    // Double-submit guard — the disabled prop covers normal clicks, but rapid
+    // keyboard submissions (Enter key) can fire before the state re-renders.
+    if (startingRef.current) return;
+    startingRef.current = true;
     setStartError("");
     setStartDncCallId(null);
     setLoading(true);
     try {
+      // Clear any stale in-progress call so the mount effect cannot restore it
+      // in the same session if the user navigates away and comes back.
+      try { window.localStorage.removeItem(activeCallStorageKey); } catch { /* storage blocked */ }
       const result = await apiRequest<{ call: CallRecord }>("/api/calls", {
         method: "POST",
         body: JSON.stringify({ prospect_name: prospectName, company, prospect_role: role }),
@@ -372,7 +386,22 @@ function Workspace() {
       setDrafts(fresh);
       setSaveStatuses(stages.map(() => "idle"));
       setCurrentStage(0);
-      setActiveCall(result.call);
+      // The POST /api/calls response only returns a subset of CallRecord fields;
+      // fill in safe null defaults for any that the server did not return.
+      const newCall: CallRecord = Object.assign(
+        {
+          outcome: null,
+          next_step_type: null,
+          next_step_channel: null,
+          next_step_when: null,
+          next_step_detail: null,
+          ended_at: null,
+          dnc_words: null,
+          prospect_role: null,
+        } satisfies Partial<CallRecord>,
+        result.call,
+      ) as CallRecord;
+      setActiveCall(newCall);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && error.code === "DNC_RESTRICTED") {
         setStartError(error.message);
@@ -386,6 +415,7 @@ function Workspace() {
       }
     } finally {
       setLoading(false);
+      startingRef.current = false;
     }
   };
 
@@ -495,8 +525,12 @@ function Workspace() {
       );
       // Server confirmed persistence. Only now clear the local draft key.
       try { window.localStorage.removeItem(activeCallStorageKey); } catch { /* storage blocked */ }
+      // Update state so the "Call completed" summary is available in case
+      // the router transition is delayed, then navigate to History.
       setActiveCall({ ...call, ...result.call });
       setCloseOpen(false);
+      // Navigate to History after a brief tick so React can flush state before unmounting.
+      setTimeout(() => { router.push("/history"); }, 50);
     } catch (error) {
       // BUG FIX #2: on timeout or network error, show a specific message and
       // re-enable the button so the user can retry (finally always runs).
@@ -554,6 +588,9 @@ function Workspace() {
   // ── Reset to start a new call ─────────────────────────────────────────────
 
   const startAnotherCall = () => {
+    // Always clear the stored key so the mount effect does not re-load the
+    // just-completed (or abandoned) call when the workspace is next visited.
+    try { window.localStorage.removeItem(activeCallStorageKey); } catch { /* storage blocked */ }
     callRef.current = null;
     setCall(null);
     const fresh = stages.map(emptyDraft);
@@ -647,7 +684,7 @@ function Workspace() {
         </div>
         {drafts[5].outcome !== "asked_not_to_call" && (
           <p className="mt-2 text-xs text-[var(--t-muted)]">
-            Do not call requires the Stage 6 "Asked not to be called again" button and their exact words.
+            Do not call requires the Stage 6 &ldquo;Asked not to be called again&rdquo; button and their exact words.
           </p>
         )}
       </fieldset>
@@ -698,7 +735,7 @@ function Workspace() {
         <div className="ws-dnc-box">
           <p className="font-semibold text-red-800 mb-1">Restricted — no further calls</p>
           <p className="text-sm text-red-700 mb-3">
-            Their exact words must be in the Stage 6 "Their words" field. No next step is allowed.
+            Their exact words must be in the Stage 6 &ldquo;Their words&rdquo; field. No next step is allowed.
           </p>
           <blockquote className="ws-verbatim bg-white border border-red-200 text-red-900 mb-3">
             {drafts[5].words || <em className="text-red-400">No words recorded yet.</em>}
@@ -780,7 +817,7 @@ function Workspace() {
           <ul className="space-y-2">
             {transcriptExamples.find((ex) => ex.stage === currentStage + 1)?.quotes.map((q) => (
               <li key={q.callId} className="ws-example-item">
-                <p className="font-serif italic text-[var(--t-primary)] leading-relaxed">"{q.text}"</p>
+                <p className="font-serif italic text-[var(--t-primary)] leading-relaxed">&ldquo;{q.text}&rdquo;</p>
                 <p className="mt-1 text-xs text-[var(--t-muted)]">{q.callId} · {q.speaker} · logged: {q.datasetLogged}</p>
               </li>
             ))}
@@ -899,7 +936,7 @@ function Workspace() {
             )}
             {aiResult && aiResult.stage === currentStage && (
               <div className="ws-ai-result" role="status" aria-live="polite">
-                <p className="ws-ai-label">AI · {aiResult.model} · not the prospect's words</p>
+                <p className="ws-ai-label">AI · {aiResult.model} · not the prospect&apos;s words</p>
                 <p className="text-sm text-[var(--t-primary)] whitespace-pre-wrap leading-relaxed">{aiResult.text}</p>
               </div>
             )}
@@ -985,7 +1022,7 @@ function Workspace() {
         <div className="ws-card p-8 md:p-10 max-w-xl w-full">
           <h1 className="ws-panel-heading mb-1">Start a call</h1>
           <p className="ws-body-muted mb-8">
-            Enter the prospect's details. The call record is created immediately when you press Start.
+            Enter the prospect&apos;s details. The call record is created immediately when you press Start.
           </p>
 
           {loading && !loadError && (
@@ -999,7 +1036,7 @@ function Workspace() {
             <div className="ws-notice ws-notice--warn mb-6" role="status">
               <div>
                 <p className="font-semibold">Server warming up…</p>
-                <p className="text-sm mt-0.5">The API is starting (cold start on free tier). This can take up to a minute — we'll retry automatically.</p>
+                <p className="text-sm mt-0.5">The API is starting (cold start on free tier). This can take up to a minute — we&apos;ll retry automatically.</p>
                 <div className="mt-2 h-1.5 w-full bg-amber-100 rounded-full overflow-hidden">
                   <div className={`h-full bg-amber-400 rounded-full ${reduceMotion ? "w-full" : "animate-pulse w-full"}`} />
                 </div>
@@ -1183,7 +1220,7 @@ function Workspace() {
           <div className="container flex items-center justify-between gap-3 py-2.5">
             <p className="text-sm font-medium text-amber-900 flex items-center gap-2">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-              Tap an outcome, add notes, then Next. Use "Their words" for verbatim quotes only.
+              Tap an outcome, add notes, then Next. Use &ldquo;Their words&rdquo; for verbatim quotes only.
             </p>
             <button type="button" className="text-xs text-amber-700 hover:text-amber-900 font-medium underline flex-shrink-0"
               aria-label="Dismiss tip" onClick={dismissTips}>Dismiss</button>
