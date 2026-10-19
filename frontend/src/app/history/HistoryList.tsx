@@ -1,212 +1,158 @@
-"use client";
+'use client';
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { DncBadge, OutcomeChip, StatusBadge } from "@/components/history/Badges";
-import { ApiError, apiFetch } from "@/lib/api";
-import {
-  displayStatus,
-  formatDateTime,
-  lastStageText,
-  nextStepSummary,
-  type CallSummary,
-} from "@/lib/callframe";
-
-const PAGE_SIZE = 50;
-const ACTIVE_CALL_KEY = "callframe.activeCallId";
-
-type ListResponse = { calls: CallSummary[]; limit: number; offset: number; total: number };
-type ListState =
-  | { kind: "loading" }
-  | { kind: "error"; message: string }
-  | { kind: "ready"; calls: CallSummary[]; total: number; moreError?: string; loadingMore?: boolean };
+import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { CallSession, fetchCallHistory, setActiveCallId } from '@/lib/callframe';
 
 export default function HistoryList() {
   const router = useRouter();
-  const [state, setState] = useState<ListState>({ kind: "loading" });
-  const [attempt, setAttempt] = useState(0);
+  const [calls, setCalls] = useState<CallSession[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const loadHistory = async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    try {
+      const data = await fetchCallHistory();
+      setCalls(data);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to load call history records.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const controller = new AbortController();
-    apiFetch<ListResponse>(`/api/calls?limit=${PAGE_SIZE}&offset=0`, { signal: controller.signal })
-      .then((data) => setState({ kind: "ready", calls: data.calls, total: data.total }))
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setState({
-          kind: "error",
-          message: error instanceof ApiError ? error.message : "The history could not be loaded. Please retry.",
-        });
-      });
-    return () => controller.abort();
-  }, [attempt]);
+    loadHistory();
+  }, []);
 
-  const retry = () => {
-    setState({ kind: "loading" });
-    setAttempt((value) => value + 1);
+  const formatDuration = (secs: number) => {
+    if (!secs) return '00:00';
+    const m = Math.floor(secs / 60).toString().padStart(2, '0');
+    const s = (secs % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
   };
 
-  const loadMore = async () => {
-    if (state.kind !== "ready" || state.loadingMore) return;
-    const { calls, total } = state;
-    setState({ kind: "ready", calls, total, loadingMore: true });
-    try {
-      const data = await apiFetch<ListResponse>(`/api/calls?limit=${PAGE_SIZE}&offset=${calls.length}`);
-      const known = new Set(calls.map((call) => call.id));
-      setState({
-        kind: "ready",
-        calls: [...calls, ...data.calls.filter((call) => !known.has(call.id))],
-        total: data.total,
-      });
-    } catch (error) {
-      setState({
-        kind: "ready",
-        calls,
-        total,
-        moreError: error instanceof ApiError ? error.message : "More calls could not be loaded.",
-      });
-    }
+  const handleResumeCall = (callId: string) => {
+    setActiveCallId(callId);
+    router.push('/workspace');
   };
 
-  const resume = (id: string) => {
-    try {
-      window.localStorage.setItem(ACTIVE_CALL_KEY, id);
-    } catch {
-      // Storage blocked: the workspace will simply start from its form.
-    }
-    router.push("/workspace");
-  };
-
-  return (
-    <div className="bg-cream-50 min-h-[calc(100vh-8rem)]">
-      <div className="container py-8 md:py-12">
-        <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
-          <div>
-            <h1 className="heading-2 text-espresso-100 mb-2">Call history</h1>
-            <p className="body text-espresso-500">Every saved call, newest first.</p>
-          </div>
-          <Link href="/workspace" className="btn btn--primary btn--sm">
-            Start a call
-          </Link>
-        </div>
-
-        {state.kind === "loading" && <ListSkeleton />}
-
-        {state.kind === "error" && (
-          <div className="card p-6 md:p-8" role="alert">
-            <h2 className="heading-4 text-espresso-100 mb-2">The history could not be loaded</h2>
-            <p className="body text-espresso-500 mb-4">{state.message}</p>
-            <button type="button" className="btn btn--primary btn--sm" onClick={retry}>
-              Retry
-            </button>
-          </div>
-        )}
-
-        {state.kind === "ready" && state.calls.length === 0 && (
-          <div className="card p-8 md:p-12 text-center">
-            <h2 className="heading-3 text-espresso-100 mb-2">No calls yet</h2>
-            <p className="body text-espresso-500 mb-6">Calls you save will appear here.</p>
-            <Link href="/workspace" className="btn btn--primary">
-              Start call
-            </Link>
-          </div>
-        )}
-
-        {state.kind === "ready" && state.calls.length > 0 && (
-          <>
-            <ul className="grid gap-4" aria-label="Saved calls">
-              {state.calls.map((call) => {
-                const status = displayStatus(call);
-                const next = nextStepSummary(call);
-                return (
-                  <li key={call.id} className="card p-5 md:p-6">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h2 className="heading-4 text-espresso-100">
-                          <Link href={`/history/${call.id}`} className="hover:underline">
-                            {call.prospect_name} · {call.company}
-                          </Link>
-                        </h2>
-                        <p className="body-sm text-espresso-500">
-                          {formatDateTime(call.started_at)}
-                          {call.prospect_role ? ` · ${call.prospect_role}` : ""}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {call.do_not_call && <DncBadge />}
-                        <StatusBadge status={status} />
-                      </div>
-                    </div>
-
-                    <dl className="mt-4 grid gap-3 sm:grid-cols-3 body-sm">
-                      <div>
-                        <dt className="caption text-espresso-500">Last stage</dt>
-                        <dd className="text-espresso-100">{lastStageText(call.last_stage)}</dd>
-                      </div>
-                      <div>
-                        <dt className="caption text-espresso-500">Outcome</dt>
-                        <dd className="mt-1">
-                          <OutcomeChip outcome={call.outcome} />
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="caption text-espresso-500">Next step</dt>
-                        <dd className="text-espresso-100">{next ?? <span className="text-espresso-500">None agreed</span>}</dd>
-                      </div>
-                    </dl>
-
-                    <div className="mt-4 flex flex-wrap items-center gap-3">
-                      <Link href={`/history/${call.id}`} className="btn btn--secondary btn--sm">
-                        View details
-                      </Link>
-                      {call.status === "in_progress" && (
-                        <button type="button" className="btn btn--primary btn--sm" onClick={() => resume(call.id)}>
-                          Resume
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-
-            <div className="mt-6 flex flex-wrap items-center gap-3">
-              <p className="body-sm text-espresso-500" aria-live="polite">
-                Showing {state.calls.length} of {state.total}
-              </p>
-              {state.calls.length < state.total && (
-                <button type="button" className="btn btn--secondary btn--sm" disabled={state.loadingMore} onClick={() => void loadMore()}>
-                  {state.loadingMore ? "Loading…" : "Load more"}
-                </button>
-              )}
-              {state.moreError && (
-                <p className="body-sm text-red-800" role="alert">
-                  {state.moreError}
-                </p>
-              )}
-            </div>
-          </>
-        )}
+  if (isLoading) {
+    return (
+      <div className="p-12 text-center text-slate-400">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent mx-auto mb-4"></div>
+        <p>Fetching call history database...</p>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
-function ListSkeleton() {
+  if (errorMessage) {
+    return (
+      <div className="p-8 bg-red-900/30 border border-red-500 rounded-xl text-center text-red-200">
+        <p className="mb-4">{errorMessage}</p>
+        <button
+          onClick={loadHistory}
+          className="bg-red-700 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-semibold"
+        >
+          Retry Load
+        </button>
+      </div>
+    );
+  }
+
+  if (calls.length === 0) {
+    return (
+      <div className="p-12 text-center bg-slate-900 border border-slate-800 rounded-xl">
+        <p className="text-slate-400 mb-4">No completed or historical calls found.</p>
+        <Link
+          href="/workspace"
+          className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors inline-block"
+        >
+          Start Your First Call
+        </Link>
+      </div>
+    );
+  }
+
   return (
-    <div className="grid gap-4" role="status">
-      {[0, 1, 2].map((item) => (
-        <div key={item} className="card p-6 animate-pulse" aria-hidden="true">
-          <div className="h-5 w-1/2 rounded bg-cream-400 mb-3" />
-          <div className="h-4 w-1/3 rounded bg-cream-400 mb-6" />
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="h-4 rounded bg-cream-400" />
-            <div className="h-4 rounded bg-cream-400" />
-            <div className="h-4 rounded bg-cream-400" />
-          </div>
-        </div>
-      ))}
-      <span className="sr-only">Loading call history…</span>
+    <div className="space-y-4">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-xl font-bold text-white">Call Logs & Records ({calls.length})</h2>
+        <button
+          onClick={loadHistory}
+          className="text-xs text-slate-400 hover:text-white border border-slate-700 px-3 py-1.5 rounded-md"
+        >
+          Refresh List
+        </button>
+      </div>
+
+      <div className="overflow-x-auto border border-slate-800 rounded-xl bg-slate-900">
+        <table className="w-full text-left text-sm text-slate-300">
+          <thead className="bg-slate-950 text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-800">
+            <tr>
+              <th className="p-4">Caller / Subject</th>
+              <th className="p-4">Status</th>
+              <th className="p-4">Outcome</th>
+              <th className="p-4">Duration</th>
+              <th className="p-4">Date</th>
+              <th className="p-4 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800">
+            {calls.map((call) => (
+              <tr key={call.id} className="hover:bg-slate-800/50 transition-colors">
+                <td className="p-4 font-medium text-white">
+                  <div>{call.callerName || 'Unnamed Caller'}</div>
+                  <div className="text-xs text-slate-500">{call.callerPhone || 'No phone'}</div>
+                </td>
+
+                <td className="p-4">
+                  <span
+                    className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${call.status === 'completed'
+                        ? 'bg-emerald-900/50 text-emerald-300 border border-emerald-700'
+                        : 'bg-amber-900/50 text-amber-300 border border-amber-700'
+                      }`}
+                  >
+                    {call.status}
+                  </span>
+                </td>
+
+                <td className="p-4 text-slate-300 capitalize">
+                  {call.outcome ? call.outcome.replace(/_/g, ' ') : 'N/A'}
+                </td>
+
+                <td className="p-4 font-mono text-slate-400">
+                  {formatDuration(call.timerSeconds)}
+                </td>
+
+                <td className="p-4 text-xs text-slate-500">
+                  {new Date(call.createdAt || Date.now()).toLocaleDateString()}
+                </td>
+
+                <td className="p-4 text-right space-x-2">
+                  <Link
+                    href={`/history/${call.id}`}
+                    className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-3 py-1.5 rounded-lg"
+                  >
+                    View Details
+                  </Link>
+                  {call.status === 'active' && (
+                    <button
+                      onClick={() => handleResumeCall(call.id)}
+                      className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg font-semibold"
+                    >
+                      Resume
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

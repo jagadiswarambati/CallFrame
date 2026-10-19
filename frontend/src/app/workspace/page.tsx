@@ -1,1283 +1,546 @@
-"use client";
+'use client';
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import examplesData from "@/data/examples.json";
-import { ApiError, apiFetch, apiUrl } from "@/lib/api";
-import { finalOutcomes, stages, type OutcomeKey } from "@/lib/stages";
+import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  CallSession,
+  getActiveCallId,
+  setActiveCallId,
+  startNewCall,
+  fetchCallById,
+  saveStageProgress,
+  endCallSession,
+  saveCallDraft,
+} from '@/lib/callframe';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
+const STAGES = [
+  { id: 1, name: 'Opening', desc: 'Greeting, verify caller details & purpose' },
+  { id: 2, name: 'Verification', desc: 'Account & identity check' },
+  { id: 3, name: 'Discovery', desc: 'Identify core issue or requirements' },
+  { id: 4, name: 'Assessment', desc: 'Evaluate options and business rules' },
+  { id: 5, name: 'Resolution', desc: 'Propose action or execute solution' },
+  { id: 6, name: 'Confirmation', desc: 'Verify customer understanding & satisfaction' },
+  { id: 7, name: 'Next Steps', desc: 'Schedule follow-up or assign ticket' },
+  { id: 8, name: 'Wrap Up', desc: 'Select call outcome and finalize notes' },
+];
 
-export const activeCallStorageKey = "callframe.activeCallId";
+const OUTCOME_OPTIONS = [
+  { id: 'resolved', label: 'Issue Resolved', requireFollowUp: false },
+  { id: 'follow_up_required', label: 'Follow-Up Required', requireFollowUp: true },
+  { id: 'escalated', label: 'Escalated to Tier 2', requireFollowUp: true },
+  { id: 'do_not_call', label: 'Do Not Call (DNC)', requireFollowUp: false },
+  { id: 'no_answer', label: 'No Answer / Dropped', requireFollowUp: false },
+];
 
-const transcriptExamples = examplesData.examples;
-
-const DNC_STAGE6_MESSAGE =
-  'Do not call can only be recorded from Stage 6. Go to Stage 6, tap \u201cAsked not to be called again\u201d, and write down their exact words.';
-
-const apiRequest = apiFetch;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
-
-type StageDraft = { outcome: string | null; words: string; notes: string };
-type CallRecord = {
-  id: string;
-  prospect_name: string;
-  company: string;
-  prospect_role: string | null;
-  status: "in_progress" | "completed" | "ended_early";
-  last_stage: number;
-  outcome: OutcomeKey | null;
-  next_step_type: string | null;
-  next_step_channel: string | null;
-  next_step_when: string | null;
-  next_step_detail: string | null;
-  do_not_call: boolean;
-  dnc_words: string | null;
-  started_at: string;
-  ended_at: string | null;
-};
-type StageResult = {
-  id: string;
-  call_id: string;
-  stage: number;
-  revision: number;
-  outcome_key: string | null;
-  prospect_words: string;
-  notes: string;
-};
-type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
-type NextStep = { type: string; channel: string; when: string; detail: string };
-
-const emptyDraft = (): StageDraft => ({ outcome: null, words: "", notes: "" });
-const emptyNextStep = (): NextStep => ({ type: "", channel: "", when: "", detail: "" });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Pure helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-function suggestedOutcome(drafts: StageDraft[]) {
-  const key = (s: number) => drafts[s - 1]?.outcome;
-  if (drafts.some((d) => d.outcome === "asked_not_to_call"))
-    return { outcome: "do_not_call" as OutcomeKey, reason: "A do-not-call request was recorded." };
-  if (key(7) === "meeting_agreed" || key(7) === "time_named")
-    return { outcome: "next_step_set" as OutcomeKey, reason: "A time or meeting was recorded at Stage 7." };
-  if (key(7) === "doc_agreed")
-    return { outcome: "document_requested" as OutcomeKey, reason: "A document was recorded at Stage 7." };
-  if (key(7) === "referred")
-    return { outcome: "referred" as OutcomeKey, reason: "A referral was recorded at Stage 7." };
-  if (key(3) === "asked_callback")
-    return { outcome: "callback_requested" as OutcomeKey, reason: "A callback was recorded at Stage 3." };
-  if (key(3) === "send_first" || key(6) === "wants_writing")
-    return { outcome: "document_requested" as OutcomeKey, reason: "A request for information was recorded." };
-  if (key(3) === "declined_to_talk" || ["declined", "not_relevant", "has_provider"].includes(key(6) ?? ""))
-    return { outcome: "declined" as OutcomeKey, reason: "A refusal was recorded." };
-  if (key(6) === "not_right_person")
-    return { outcome: "declined" as OutcomeKey, reason: "No referral was recorded at Stage 7." };
-  if (key(1) === "wrong_or_left")
-    return { outcome: "wrong_contact" as OutcomeKey, reason: "A wrong contact was recorded at Stage 1." };
-  if (["line_or_language", "not_available"].includes(key(1) ?? ""))
-    return { outcome: "no_contact" as OutcomeKey, reason: "A contact or availability issue was recorded at Stage 1." };
-  return null;
-}
-
-function formatDuration(startedAt: string, now: number) {
-  const seconds = Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1000));
-  return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Workspace component
-// ─────────────────────────────────────────────────────────────────────────────
-
-function Workspace() {
+export default function WorkspacePage() {
   const router = useRouter();
 
-  // Form state
-  const [prospectName, setProspectName] = useState("");
-  const [company, setCompany] = useState("");
-  const [role, setRole] = useState("");
+  // Active Call State
+  const [activeCall, setActiveCall] = useState<CallSession | null>(null);
+  const [currentStage, setCurrentStage] = useState<number>(1);
+  const [timerSeconds, setTimerSeconds] = useState<number>(0);
+  const [notes, setNotes] = useState<string>('');
+  const [stageInputs, setStageInputs] = useState<Record<string, any>>({});
+  const [selectedOutcome, setSelectedOutcome] = useState<string>('');
+  const [followUpDate, setFollowUpDate] = useState<string>('');
 
-  // Call state
-  const [call, setCall] = useState<CallRecord | null>(null);
-  const callRef = useRef<CallRecord | null>(null);
+  // Initial Caller Form State (Before call start)
+  const [callerName, setCallerName] = useState<string>('');
+  const [callerPhone, setCallerPhone] = useState<string>('');
+  const [callerEmail, setCallerEmail] = useState<string>('');
+  const [company, setCompany] = useState<string>('');
 
-  // Stage drafts — kept in both ref (for async closures) and state (for render)
-  const [drafts, setDrafts] = useState<StageDraft[]>(() => stages.map(emptyDraft));
-  const draftsRef = useRef<StageDraft[]>(drafts);
-  const needsSave = useRef<boolean[]>(stages.map(() => false));
-  const [currentStage, setCurrentStage] = useState(0);
-  const [saveStatuses, setSaveStatuses] = useState<SaveStatus[]>(() => stages.map(() => "idle"));
+  // UI / Status Indicators
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [isEnding, setIsEnding] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
 
-  // Status/error flags
-  const [loading, setLoading] = useState(false);
-  const [startError, setStartError] = useState("");
-  const [startDncCallId, setStartDncCallId] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState("");
-  const [saveError, setSaveError] = useState("");
+  // Timer Ref
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Close/end-call panel
-  const [closeOpen, setCloseOpen] = useState(false);
-  const [closeOutcome, setCloseOutcome] = useState<OutcomeKey | "">("");
-  const [nextStep, setNextStep] = useState<NextStep>(emptyNextStep());
-  const [closeError, setCloseError] = useState("");
-  const [closing, setClosing] = useState(false);
-
-  // Timer
-  const [now, setNow] = useState(0);
-
-  // Server readiness
-  const [serverReady, setServerReady] = useState(true);
-  const [reduceMotion, setReduceMotion] = useState(() =>
-    typeof window !== "undefined"
-      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      : false,
-  );
-  const [showTips, setShowTips] = useState(() =>
-    typeof window !== "undefined"
-      ? !window.localStorage.getItem("callframe.tipsDismissed")
-      : true,
-  );
-
-  // AI feature
-  const [aiLoadingStage, setAiLoadingStage] = useState<number | null>(null);
-  const [aiResult, setAiResult] = useState<{ stage: number; text: string; model: string } | null>(null);
-  const [aiError, setAiError] = useState<{ stage: number; message: string } | null>(null);
-  const [aiBlockedCallId, setAiBlockedCallId] = useState<string | null>(null);
-
-  // Save queue — serialises stage PUT requests
-  const saveQueue = useRef<Promise<void>>(Promise.resolve());
-  const debounceTimer = useRef<number | null>(null);
-  const warmupTimer = useRef<number | null>(null);
-  // Prevents double-submit on Start a Call (belt-and-suspenders on top of the
-  // disabled={loading} prop — guards against rapid form submission events).
-  const startingRef = useRef(false);
-
-  // ── Setters ──────────────────────────────────────────────────────────────
-
-  const setActiveCall = useCallback((next: CallRecord | null) => {
-    callRef.current = next;
-    setCall(next);
-  }, []);
-
-  // ── Load an existing call from the API ───────────────────────────────────
-  //
-  // BUG FIX #1: when loadCall receives a call that is NOT in_progress (i.e.
-  // completed / ended_early), we must:
-  //   a) Remove the stale localStorage key so future visits show the start form.
-  //   b) NOT restore that call into workspace state — the user should see the
-  //      start-call form, not the finished call's workspace.
-  //
-  // Completed / ended-early calls are accessible through History; the workspace
-  // is only for calls that are actively in progress.
-
-  const loadCall = useCallback(
-    async (id: string) => {
-      setLoading(true);
-      setLoadError("");
-      try {
-        const result = await apiRequest<{ call: CallRecord; stage_results: StageResult[] }>(
-          `/api/calls/${encodeURIComponent(id)}`,
-        );
-
-        // BUG FIX #1a — completed or ended-early call in localStorage.
-        // Clear the stale key and leave call === null so the start form appears.
-        if (result.call.status !== "in_progress") {
-          try { window.localStorage.removeItem(activeCallStorageKey); } catch { /* storage blocked */ }
-          // Do NOT call setActiveCall — leave the user on the start-call form.
-          return;
-        }
-
-        const restored = stages.map(() => emptyDraft());
-        const statuses = stages.map(() => "idle" as SaveStatus);
-        const loadedStages = new Set<number>();
-
-        for (const sr of result.stage_results) {
-          const index = sr.stage - 1;
-          if (index < 0 || index >= stages.length || loadedStages.has(index)) continue;
-          loadedStages.add(index);
-          restored[index] = { outcome: sr.outcome_key, words: sr.prospect_words, notes: sr.notes };
-          statuses[index] = "saved";
-        }
-
-        draftsRef.current = restored;
-        needsSave.current = stages.map(() => false);
-        setDrafts(restored);
-        setSaveStatuses(statuses);
-        setActiveCall(result.call);
-        setCurrentStage(Math.max(0, Math.min(7, result.call.last_stage - 1)));
-      } catch (error) {
-        // BUG FIX #1b — 404 or network error: clear the stale key so the user
-        // can start a new call instead of being stuck on a "Retry loading" screen.
-        if (error instanceof ApiError && error.status === 404) {
-          try { window.localStorage.removeItem(activeCallStorageKey); } catch { /* storage blocked */ }
-          // Silent clear — just show the start form.
-          return;
-        }
-        setLoadError(
-          error instanceof Error
-            ? error.message
-            : "The call could not be restored. Use the form below to start a new call.",
-        );
-      } finally {
-        setLoading(false);
-      }
-    },
-    [setActiveCall],
-  );
-
-  // ── On mount: restore an in-progress call (if any) ───────────────────────
-
+  // Load existing active call on mount
   useEffect(() => {
-    const id = window.localStorage.getItem(activeCallStorageKey);
-    if (!id) return;
-    const timer = window.setTimeout(() => void loadCall(id), 0);
-    return () => window.clearTimeout(timer);
-  }, [loadCall]);
-
-  // ── Timer for active call ─────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!call || call.status !== "in_progress") return;
-    // Update immediately then on each second tick.
-    // setNow is called inside the tick function (not at effect body level)
-    // to satisfy react-hooks/set-state-in-effect.
-    const tick = () => setNow(Date.now());
-    tick();
-    const interval = window.setInterval(tick, 1000);
-    return () => window.clearInterval(interval);
-  }, [call]);
-
-  // ── Reduced-motion detection ──────────────────────────────────────────────
-
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const handler = (e: MediaQueryListEvent) => setReduceMotion(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-
-  // ── Server warm-up polling ────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (serverReady) return;
-    const checkHealth = async () => {
-      try {
-        const res = await fetch(`${apiUrl}/health`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.db === "up") {
-            setServerReady(true);
-            if (warmupTimer.current) window.clearInterval(warmupTimer.current);
+    const existingId = getActiveCallId();
+    if (existingId) {
+      setIsLoading(true);
+      fetchCallById(existingId)
+        .then((call) => {
+          if (call.status === 'active') {
+            setActiveCall(call);
+            setCurrentStage(call.currentStage || 1);
+            setTimerSeconds(call.timerSeconds || 0);
+            setNotes(call.notes || '');
+            setSelectedOutcome(call.outcome || '');
+            setFollowUpDate(call.followUpDate || '');
+            setStageInputs(call.stageData?.[call.currentStage] || {});
+          } else {
+            // If already completed, wipe active reference
+            setActiveCallId(null);
           }
-        }
-      } catch { /* keep polling */ }
+        })
+        .catch(() => {
+          setErrorMessage('Could not restore previous active call session.');
+          setActiveCallId(null);
+        })
+        .finally(() => setIsLoading(false));
+    }
+  }, []);
+
+  // Timer Tick Handling
+  useEffect(() => {
+    if (activeCall && activeCall.status === 'active') {
+      timerIntervalRef.current = setInterval(() => {
+        setTimerSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    }
+
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
-    checkHealth();
-    warmupTimer.current = window.setInterval(checkHealth, 3000);
-    return () => { if (warmupTimer.current) window.clearInterval(warmupTimer.current); };
-  }, [serverReady]);
+  }, [activeCall]);
 
-  const dismissTips = () => {
-    window.localStorage.setItem("callframe.tipsDismissed", "true");
-    setShowTips(false);
+  // Format Timer Seconds (MM:SS)
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60).toString().padStart(2, '0');
+    const s = (secs % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
   };
 
-  // ── Draft management ──────────────────────────────────────────────────────
+  // 1. Start a Brand New Call
+  const handleStartCallClick = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isLoading) return;
 
-  const setStageDraft = (index: number, patch: Partial<StageDraft>) => {
-    const next = draftsRef.current.map((d, i) => i === index ? { ...d, ...patch } : d);
-    draftsRef.current = next;
-    needsSave.current[index] = true;
-    setDrafts(next);
-    setSaveStatuses((prev) => prev.map((s, i) => i === index ? "pending" : s));
-    setSaveError("");
+    setErrorMessage(null);
+    setIsLoading(true);
+
+    try {
+      const newCall = await startNewCall({
+        name: callerName,
+        phone: callerPhone,
+        email: callerEmail,
+        company,
+      });
+
+      // Reset all Workspace values
+      setActiveCall(newCall);
+      setCurrentStage(1);
+      setTimerSeconds(0);
+      setNotes('');
+      setStageInputs({});
+      setSelectedOutcome('');
+      setFollowUpDate('');
+      setValidationErrors({});
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to start a new call. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  // ── persistStage — PUT one stage to the API ───────────────────────────────
-  //
-  // Returns true on success, false on error. Never throws.
-  // Chains on saveQueue so concurrent calls are serialised.
+  // 2. Validate Fields for Current Stage
+  const validateStage = (): boolean => {
+    const errors: Record<string, string> = {};
 
-  const persistStage = useCallback((index: number): Promise<boolean> => {
-    const callId = callRef.current?.id;
-    if (!callId || callRef.current?.status !== "in_progress") return Promise.resolve(false);
-
-    const operation = saveQueue.current.then(async () => {
-      const draft = draftsRef.current[index];
-      const snapshot = { ...draft };
-
-      setSaveStatuses((prev) => prev.map((s, i) => i === index ? "saving" : s));
-
-      try {
-        await apiRequest(`/api/calls/${encodeURIComponent(callId)}/stages/${index + 1}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            outcome_key: draft.outcome,
-            prospect_words: draft.words,
-            notes: draft.notes,
-          }),
-        });
-
-        const latest = draftsRef.current[index];
-        const unchanged =
-          latest.outcome === snapshot.outcome &&
-          latest.words === snapshot.words &&
-          latest.notes === snapshot.notes;
-        if (unchanged) needsSave.current[index] = false;
-
-        setSaveStatuses((prev) => prev.map((s, i) => i === index ? (unchanged ? "saved" : "pending") : s));
-        setSaveError("");
-        return true;
-      } catch (error) {
-        setSaveStatuses((prev) => prev.map((s, i) => i === index ? "error" : s));
-        const msg = error instanceof Error ? error.message : "Stage not saved.";
-        setSaveError(msg);
-        return false;
+    if (currentStage === 1) {
+      if (!activeCall?.callerName && !callerName) {
+        errors.callerName = 'Caller name or subject is required.';
       }
+    }
+
+    if (currentStage === 8) {
+      if (!selectedOutcome) {
+        errors.outcome = 'You must select a call outcome before ending.';
+      }
+      const outcomeObj = OUTCOME_OPTIONS.find((o) => o.id === selectedOutcome);
+      if (outcomeObj?.requireFollowUp && !followUpDate) {
+        errors.followUpDate = 'Follow-up date is required for this outcome.';
+      }
+    }
+
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  // 3. Save & Proceed to Next Stage
+  const handleNextStage = async () => {
+    if (isSaving || !activeCall) return;
+    if (!validateStage()) return;
+
+    setIsSaving(true);
+    setErrorMessage(null);
+
+    const nextStageNum = Math.min(8, currentStage + 1);
+
+    try {
+      const updated = await saveStageProgress(activeCall.id, {
+        stage: currentStage,
+        stageData: stageInputs,
+        notes,
+        timerSeconds,
+      });
+
+      setActiveCall(updated);
+      setCurrentStage(nextStageNum);
+      setStageInputs(updated.stageData?.[nextStageNum] || {});
+    } catch (err: any) {
+      setErrorMessage('Saving failed. Please check your connection and retry.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // 4. Return to Previous Stage
+  const handlePreviousStage = () => {
+    if (currentStage <= 1 || !activeCall) return;
+
+    const prevStageNum = currentStage - 1;
+    // Preserve local changes in draft cache
+    saveCallDraft(activeCall.id, {
+      ...activeCall,
+      currentStage: prevStageNum,
+      notes,
+      timerSeconds,
     });
 
-    saveQueue.current = operation.then(() => undefined, () => undefined);
-    return operation;
-  }, []);
-
-  // ── Debounced auto-save ───────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!call || call.status !== "in_progress" || closeOpen) return;
-    if (!needsSave.current[currentStage]) return;
-    if (debounceTimer.current !== null) window.clearTimeout(debounceTimer.current);
-    debounceTimer.current = window.setTimeout(() => { void persistStage(currentStage); }, 700);
-    return () => { if (debounceTimer.current !== null) window.clearTimeout(debounceTimer.current); };
-  }, [call, closeOpen, currentStage, drafts, persistStage]);
-
-  // ── Start a new call ──────────────────────────────────────────────────────
-
-  const startCall = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!serverReady) {
-      setStartError("Server is still warming up. Please wait a moment.");
-      return;
-    }
-    // Double-submit guard — the disabled prop covers normal clicks, but rapid
-    // keyboard submissions (Enter key) can fire before the state re-renders.
-    if (startingRef.current) return;
-    startingRef.current = true;
-    setStartError("");
-    setStartDncCallId(null);
-    setLoading(true);
-    try {
-      // Clear any stale in-progress call so the mount effect cannot restore it
-      // in the same session if the user navigates away and comes back.
-      try { window.localStorage.removeItem(activeCallStorageKey); } catch { /* storage blocked */ }
-      const result = await apiRequest<{ call: CallRecord }>("/api/calls", {
-        method: "POST",
-        body: JSON.stringify({ prospect_name: prospectName, company, prospect_role: role }),
-      });
-      window.localStorage.setItem(activeCallStorageKey, result.call.id);
-      const fresh = stages.map(emptyDraft);
-      draftsRef.current = fresh;
-      needsSave.current = stages.map(() => false);
-      setDrafts(fresh);
-      setSaveStatuses(stages.map(() => "idle"));
-      setCurrentStage(0);
-      // The POST /api/calls response only returns a subset of CallRecord fields;
-      // fill in safe null defaults for any that the server did not return.
-      const newCall: CallRecord = Object.assign(
-        {
-          outcome: null,
-          next_step_type: null,
-          next_step_channel: null,
-          next_step_when: null,
-          next_step_detail: null,
-          ended_at: null,
-          dnc_words: null,
-          prospect_role: null,
-        } satisfies Partial<CallRecord>,
-        result.call,
-      ) as CallRecord;
-      setActiveCall(newCall);
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 409 && error.code === "DNC_RESTRICTED") {
-        setStartError(error.message);
-        setStartDncCallId(error.details.find((d) => d.field === "call_id")?.message ?? null);
-      } else {
-        setStartError(
-          error instanceof Error
-            ? error.message
-            : "The call could not be started. Your details remain in the form; retry when ready.",
-        );
-      }
-    } finally {
-      setLoading(false);
-      startingRef.current = false;
-    }
+    setCurrentStage(prevStageNum);
+    setStageInputs(activeCall.stageData?.[prevStageNum] || {});
   };
 
-  // ── Navigate between stages ───────────────────────────────────────────────
+  // 5. End Call Action
+  const handleEndCallClick = async () => {
+    if (isEnding || !activeCall) return;
 
-  const goToStage = async (index: number) => {
-    if (!call || index < 0 || index > 7) return;
-    if (debounceTimer.current !== null) window.clearTimeout(debounceTimer.current);
-    const saved = await persistStage(currentStage);
-    if (!saved) return;
-    if (index > call.last_stage - 1) {
-      try {
-        const result = await apiRequest<{ call: CallRecord }>(
-          `/api/calls/${encodeURIComponent(call.id)}/progress`,
-          { method: "PATCH", body: JSON.stringify({ stage: index + 1 }) },
-        );
-        setActiveCall({ ...call, ...result.call });
-      } catch (error) {
-        setSaveError(error instanceof Error ? error.message : "Progress was not saved. Retry before continuing.");
-        return;
-      }
-    }
-    setCurrentStage(index);
-    setCloseOpen(false);
-  };
-
-  // ── Outcome button selection ───────────────────────────────────────────────
-
-  const selectStageOutcome = (index: number, outcome: string) => {
-    const selected = draftsRef.current[index].outcome === outcome ? null : outcome;
-    setStageDraft(index, { outcome: selected });
-    if (selected) void persistStage(index);
-    if (index === 5 && selected === "asked_not_to_call") {
-      setCloseOutcome("do_not_call");
-      setCloseError("");
-      setCloseOpen(true);
-    }
-  };
-
-  const openClosePanel = () => {
-    const suggestion = suggestedOutcome(draftsRef.current);
-    setCloseOutcome(suggestion?.outcome ?? "");
-    setCloseError("");
-    setCloseOpen(true);
-  };
-
-  // ── Save and close ─────────────────────────────────────────────────────────
-  //
-  // BUG FIX #2: the original code could get stuck in "Saving call…" forever
-  // when a stage PUT fetch hung (no TCP response, no timeout). Fix:
-  //   - api.ts now adds AbortSignal.timeout(12_000) to all mutating requests.
-  //   - If closing itself times out or errors, setClosing(false) in finally
-  //     re-enables the button immediately with a clear error message.
-  //
-  // BUG FIX #1 (persistence): localStorage is removed ONLY after the server
-  // confirms the call is closed, so no data is lost on a failed close.
-
-  const saveAndClose = async () => {
-    if (!call || !closeOutcome) {
-      setCloseError("Choose the outcome that best matches what happened.");
-      return;
-    }
-    if (
-      closeOutcome === "do_not_call" &&
-      (draftsRef.current[5].outcome !== "asked_not_to_call" || !draftsRef.current[5].words.trim())
-    ) {
-      setCloseError(DNC_STAGE6_MESSAGE);
+    // Direct to Stage 8 if not already there
+    if (currentStage !== 8) {
+      setCurrentStage(8);
       return;
     }
 
-    setClosing(true);
-    setCloseError("");
-    if (debounceTimer.current !== null) window.clearTimeout(debounceTimer.current);
+    if (!validateStage()) return;
 
-    // Flush any unsaved stage data before closing.
-    for (let i = 0; i < draftsRef.current.length; i++) {
-      const draft = draftsRef.current[i];
-      const hasData = Boolean(draft.outcome || draft.words || draft.notes);
-      if (hasData || needsSave.current[i]) {
-        const saved = await persistStage(i);
-        if (!saved) {
-          setCloseError(
-            "A stage could not be saved. Retry — the call is still open and your edits are here.",
-          );
-          setClosing(false);
-          return;
-        }
-      }
-    }
+    setIsEnding(true);
+    setErrorMessage(null);
 
     try {
-      const result = await apiRequest<{ call: CallRecord }>(
-        `/api/calls/${encodeURIComponent(call.id)}/close`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            outcome: closeOutcome,
-            ended_stage: currentStage + 1,
-            next_step: {
-              type: nextStep.type || null,
-              channel: nextStep.channel || null,
-              when: nextStep.when || null,
-              detail: nextStep.detail || null,
-            },
-          }),
+      await endCallSession(activeCall.id, {
+        outcome: selectedOutcome,
+        followUpDate,
+        notes,
+        timerSeconds,
+        stageData: {
+          ...activeCall.stageData,
+          [currentStage]: stageInputs,
         },
-      );
-      // Server confirmed persistence. Only now clear the local draft key.
-      try { window.localStorage.removeItem(activeCallStorageKey); } catch { /* storage blocked */ }
-      // Update state so the "Call completed" summary is available in case
-      // the router transition is delayed, then navigate to History.
-      setActiveCall({ ...call, ...result.call });
-      setCloseOpen(false);
-      // Navigate to History after a brief tick so React can flush state before unmounting.
-      setTimeout(() => { router.push("/history"); }, 50);
-    } catch (error) {
-      // BUG FIX #2: on timeout or network error, show a specific message and
-      // re-enable the button so the user can retry (finally always runs).
-      const isTimeout = error instanceof ApiError && error.code === "TIMEOUT";
-      setCloseError(
-        isTimeout
-          ? "The request timed out. Your edits are safe — check your connection and retry."
-          : error instanceof Error
-          ? error.message
-          : "The call was not closed. Your edits remain here; retry when the service is available.",
-      );
+      });
+
+      // Clear local state and navigate to History
+      setActiveCall(null);
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      router.push('/history');
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to submit call completion. Retrying allowed.');
     } finally {
-      setClosing(false);
+      setIsEnding(false);
     }
   };
 
-  // ── AI suggestion ─────────────────────────────────────────────────────────
-
-  const suggestWhatToSay = async () => {
-    if (!call || aiLoadingStage !== null) return;
-    const stageIndex = currentStage;
-    setAiLoadingStage(stageIndex);
-    setAiError(null);
-    setAiResult(null);
-    try {
-      await persistStage(stageIndex);
-      const response = await apiRequest<{
-        blocked?: boolean;
-        message?: string;
-        suggestion?: { text: string; model: string };
-      }>(`/api/calls/${encodeURIComponent(call.id)}/assist`, {
-        method: "POST",
-        body: JSON.stringify({ stage: stageIndex + 1 }),
-      });
-      if (response.blocked) {
-        setAiBlockedCallId(call.id);
-      } else if (response.suggestion?.text) {
-        setAiResult({ stage: stageIndex, text: response.suggestion.text, model: response.suggestion.model });
-      } else {
-        throw new Error("The AI suggestion was empty. Try again.");
-      }
-    } catch (error) {
-      setAiError({
-        stage: stageIndex,
-        message:
-          error instanceof ApiError && error.message
-            ? error.message
-            : "The AI suggestion is unavailable right now. Nothing else is affected.",
-      });
-    } finally {
-      setAiLoadingStage(null);
+  // 6. Cancel / Close Workspace Safeguard
+  const handleCancelWorkspace = () => {
+    if (activeCall) {
+      const confirmLeave = window.confirm(
+        'Are you sure you want to exit? Your active call session will remain saved as draft.'
+      );
+      if (!confirmLeave) return;
     }
+    router.push('/history');
   };
 
-  // ── Reset to start a new call ─────────────────────────────────────────────
-
-  const startAnotherCall = () => {
-    // Always clear the stored key so the mount effect does not re-load the
-    // just-completed (or abandoned) call when the workspace is next visited.
-    try { window.localStorage.removeItem(activeCallStorageKey); } catch { /* storage blocked */ }
-    callRef.current = null;
-    setCall(null);
-    const fresh = stages.map(emptyDraft);
-    draftsRef.current = fresh;
-    needsSave.current = stages.map(() => false);
-    setDrafts(fresh);
-    setSaveStatuses(stages.map(() => "idle"));
-    setCurrentStage(0);
-    setProspectName("");
-    setCompany("");
-    setRole("");
-    setCloseOpen(false);
-    setCloseOutcome("");
-    setNextStep(emptyNextStep());
-    setStartError("");
-    setStartDncCallId(null);
-    setSaveError("");
-    setLoadError("");
-  };
-
-  // ── Retry load from localStorage ─────────────────────────────────────────
-
-  const retryLoad = () => {
-    const id = window.localStorage.getItem(activeCallStorageKey);
-    if (id) void loadCall(id);
-    else startAnotherCall(); // key was cleared; go to the start form
-  };
-
-  // ── Derived state ─────────────────────────────────────────────────────────
-
-  const currentDraft = drafts[currentStage];
-  const hasCapturedThisStage = Boolean(
-    currentDraft.outcome || currentDraft.words.trim() || currentDraft.notes.trim(),
-  );
-  const aiBlocked = Boolean(
-    call &&
-      (call.do_not_call ||
-        aiBlockedCallId === call.id ||
-        drafts.some((d) => d.outcome === "asked_not_to_call")),
-  );
-  const suggestion = suggestedOutcome(drafts);
-  const dncBlocked =
-    closeOutcome === "do_not_call" &&
-    (drafts[5].outcome !== "asked_not_to_call" || !drafts[5].words.trim());
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Close panel
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const closePanel = (
-    <div className="p-6 md:p-8 space-y-6">
-      <div>
-        <p className="ws-eyebrow">Closing · stage reached {currentStage + 1} of 8</p>
-        <h1 className="ws-panel-heading mt-1">End this call</h1>
-        <p className="ws-body-muted mt-2">
-          Choose what actually happened. A document, callback, or referral is a partial outcome — not a success.
-        </p>
-      </div>
-
-      {suggestion && (
-        <div className="ws-notice ws-notice--suggest">
-          <strong>Suggested from what you recorded:</strong>{" "}
-          {finalOutcomes.find((o) => o.key === suggestion.outcome)?.label}. {suggestion.reason}
-        </div>
-      )}
-
-      <fieldset>
-        <legend className="ws-label-heading mb-3">Final outcome</legend>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {finalOutcomes.map((outcome) => {
-            const selected = closeOutcome === outcome.key;
-            const isRestricted = outcome.className === "restricted";
-            return (
-              <button
-                key={outcome.key}
-                aria-pressed={selected}
-                type="button"
-                onClick={() => { setCloseOutcome(outcome.key); setNextStep(emptyNextStep()); setCloseError(""); }}
-                className={[
-                  "ws-outcome-btn",
-                  selected ? "ws-outcome-btn--selected" : "",
-                  isRestricted ? "ws-outcome-btn--restricted" : "",
-                ].filter(Boolean).join(" ")}
-              >
-                <span className="flex-1 text-left text-sm font-medium">{outcome.label}</span>
-                {outcome.className === "partial" && <span className="ws-badge ws-badge--partial">Partial</span>}
-                {isRestricted && <span className="ws-badge ws-badge--restricted">Restricted</span>}
-              </button>
-            );
-          })}
-        </div>
-        {drafts[5].outcome !== "asked_not_to_call" && (
-          <p className="mt-2 text-xs text-[var(--t-muted)]">
-            Do not call requires the Stage 6 &ldquo;Asked not to be called again&rdquo; button and their exact words.
-          </p>
-        )}
-      </fieldset>
-
-      {/* Next-step fields */}
-      {closeOutcome && ["next_step_set","document_requested","callback_requested","referred"].includes(closeOutcome) && (
-        <fieldset className="ws-fieldset-box">
-          <legend className="ws-label-heading mb-4">Agreed next step</legend>
-          <div className="grid gap-4 sm:grid-cols-2">
-            {closeOutcome === "next_step_set" && (<>
-              <div>
-                <label className="ws-label" htmlFor="ns-type">Type</label>
-                <select id="ns-type" className="ws-input" value={nextStep.type} onChange={(e) => setNextStep({ ...nextStep, type: e.target.value })}>
-                  <option value="">Choose…</option>
-                  <option value="call">Call</option>
-                  <option value="meeting">Meeting</option>
-                </select>
-              </div>
-              <div>
-                <label className="ws-label" htmlFor="ns-when">When</label>
-                <input id="ns-when" className="ws-input" maxLength={4000} placeholder="Agreed date or time" value={nextStep.when} onChange={(e) => setNextStep({ ...nextStep, when: e.target.value })} />
-              </div>
-            </>)}
-            {closeOutcome === "callback_requested" && (
-              <div className="sm:col-span-2">
-                <label className="ws-label" htmlFor="ns-callback">Callback time</label>
-                <input id="ns-callback" className="ws-input" maxLength={4000} placeholder="Time they requested" value={nextStep.when} onChange={(e) => setNextStep({ ...nextStep, type: "call", when: e.target.value })} />
-              </div>
-            )}
-            {closeOutcome === "document_requested" && (
-              <div className="sm:col-span-2">
-                <label className="ws-label" htmlFor="ns-channel">Send via</label>
-                <input id="ns-channel" className="ws-input" maxLength={4000} placeholder="e.g. WhatsApp, email" value={nextStep.channel} onChange={(e) => setNextStep({ ...nextStep, type: "document", channel: e.target.value })} />
-              </div>
-            )}
-            {closeOutcome === "referred" && (
-              <div className="sm:col-span-2">
-                <label className="ws-label" htmlFor="ns-referral">Who were you referred to?</label>
-                <input id="ns-referral" className="ws-input" maxLength={4000} placeholder="Name or role" value={nextStep.detail} onChange={(e) => setNextStep({ ...nextStep, type: "referral", detail: e.target.value })} />
-              </div>
-            )}
-          </div>
-        </fieldset>
-      )}
-
-      {/* DNC details */}
-      {closeOutcome === "do_not_call" && (
-        <div className="ws-dnc-box">
-          <p className="font-semibold text-red-800 mb-1">Restricted — no further calls</p>
-          <p className="text-sm text-red-700 mb-3">
-            Their exact words must be in the Stage 6 &ldquo;Their words&rdquo; field. No next step is allowed.
-          </p>
-          <blockquote className="ws-verbatim bg-white border border-red-200 text-red-900 mb-3">
-            {drafts[5].words || <em className="text-red-400">No words recorded yet.</em>}
-          </blockquote>
-          {dncBlocked && (
-            <p className="mb-3 text-sm font-medium text-red-800 bg-white rounded-lg p-3 border border-red-200" role="alert">
-              {DNC_STAGE6_MESSAGE}
-            </p>
-          )}
-          {dncBlocked && (
-            <button type="button" className="ws-btn ws-btn--outline-danger ws-btn--sm" onClick={() => { setCloseOpen(false); void goToStage(5); }}>
-              Go to Stage 6
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Stage 5 words recap */}
-      <div>
-        <p className="ws-eyebrow mb-1">Stage 5 · Their need, in their words</p>
-        <blockquote className="ws-verbatim">
-          {drafts[4].words || <em className="text-[var(--t-muted)]">No words recorded at Stage 5.</em>}
-        </blockquote>
-      </div>
-
-      {closeError && (
-        <div className="ws-alert ws-alert--error" role="alert">
-          <p>{closeError}</p>
-          {saveError && (
-            <button type="button" className="mt-2 ws-btn ws-btn--outline-danger ws-btn--sm"
-              onClick={() => { const fi = saveStatuses.findIndex((s) => s === "error"); void persistStage(fi >= 0 ? fi : currentStage); }}>
-              Retry stage save
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-wrap gap-3 pt-4 border-t border-[var(--border)]">
-        <button type="button" className="ws-btn ws-btn--ghost" onClick={() => setCloseOpen(false)}>
-          ← Back to Stage {currentStage + 1}
-        </button>
-        <button
-          type="button"
-          className="ws-btn ws-btn--primary flex-1 sm:flex-none"
-          disabled={closing || !closeOutcome || dncBlocked}
-          onClick={() => void saveAndClose()}
-        >
-          {closing ? (
-            <span className="flex items-center gap-2">
-              <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
-              Saving call…
-            </span>
-          ) : "Save and end call"}
-        </button>
-      </div>
-    </div>
-  );
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Stage content
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const mainContent = (
-    <div>
-      {/* Stage header */}
-      <div className="ws-stage-header">
-        <p className="ws-eyebrow">Stage {currentStage + 1} of {stages.length}</p>
-        <h1 id="stage-heading" className="ws-stage-heading mt-1">{stages[currentStage].title}</h1>
-        <p className="ws-body-muted mt-1 max-w-2xl">{stages[currentStage].guidance}</p>
-      </div>
-
-      <div className="ws-stage-body space-y-8">
-        {/* Transcript examples */}
-        <section aria-labelledby="ex-heading">
-          <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
-            <h2 id="ex-heading" className="ws-section-heading">They may say</h2>
-            <span className="text-xs text-[var(--t-muted)] uppercase tracking-wide">Verbatim from transcripts</span>
-          </div>
-          <ul className="space-y-2">
-            {transcriptExamples.find((ex) => ex.stage === currentStage + 1)?.quotes.map((q) => (
-              <li key={q.callId} className="ws-example-item">
-                <p className="font-serif italic text-[var(--t-primary)] leading-relaxed">&ldquo;{q.text}&rdquo;</p>
-                <p className="mt-1 text-xs text-[var(--t-muted)]">{q.callId} · {q.speaker} · logged: {q.datasetLogged}</p>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        {/* Guidance prompts */}
-        <section aria-labelledby="guidance-heading">
-          <h2 id="guidance-heading" className="ws-section-heading mb-3">Guidance</h2>
-          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {stages[currentStage].prompts.map((p) => (
-              <li key={p} className="ws-prompt-item">{p}</li>
-            ))}
-          </ul>
-        </section>
-
-        {/* Outcome buttons */}
-        <fieldset>
-          <legend className="ws-label-heading mb-3">What happened?</legend>
-          <div className="flex flex-wrap gap-2">
-            {stages[currentStage].outcomes.map(([key, label]) => {
-              const selected = currentDraft.outcome === key;
-              const restricted = key === "asked_not_to_call";
-              return (
-                <button
-                  key={key}
-                  aria-pressed={selected}
-                  type="button"
-                  onClick={() => selectStageOutcome(currentStage, key)}
-                  className={[
-                    "ws-chip",
-                    selected ? "ws-chip--selected" : "",
-                    restricted ? "ws-chip--restricted" : "",
-                  ].filter(Boolean).join(" ")}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </fieldset>
-
-        {/* Text fields */}
-        <div className="space-y-5">
-          <div>
-            <label className="ws-label" htmlFor="prospect-words">
-              {currentStage === 4 ? "What they said they need, in their words" : "Their words"}
-            </label>
-            <textarea
-              id="prospect-words"
-              className={`ws-textarea ws-textarea--verbatim ${currentStage === 4 ? "min-h-[8rem]" : ""}`}
-              maxLength={4000}
-              placeholder="Record only what the prospect actually said."
-              value={currentDraft.words}
-              onChange={(e) => setStageDraft(currentStage, { words: e.target.value })}
-              onBlur={() => void persistStage(currentStage)}
-            />
-            {currentStage === 4 && !currentDraft.words.trim() && (
-              <p className="mt-1.5 text-sm text-amber-700 flex items-center gap-1.5">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
-                Exact words not captured yet — you can continue without them.
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label className="ws-label" htmlFor="caller-notes">
-              Your note <span className="font-normal text-[var(--t-muted)]">· caller interpretation or context</span>
-            </label>
-            <textarea
-              id="caller-notes"
-              className="ws-textarea ws-textarea--notes"
-              maxLength={4000}
-              placeholder="Keep your note separate from the prospect's words."
-              value={currentDraft.notes}
-              onChange={(e) => setStageDraft(currentStage, { notes: e.target.value })}
-              onBlur={() => void persistStage(currentStage)}
-            />
-          </div>
-
-          {/* AI suggestion section */}
-          <section aria-labelledby="ai-heading" className="ws-ai-section">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-              <h2 id="ai-heading" className="ws-section-heading">
-                AI suggestion
-                <span className="ml-2 font-normal text-xs text-[var(--t-muted)] normal-case tracking-normal">
-                  · optional · Gemini · never edits your notes
-                </span>
-              </h2>
-              <button
-                type="button"
-                className="ws-btn ws-btn--ghost ws-btn--sm"
-                disabled={aiLoadingStage !== null || aiBlocked || !hasCapturedThisStage}
-                aria-describedby="ai-desc"
-                onClick={() => void suggestWhatToSay()}
-              >
-                {aiLoadingStage === currentStage ? (
-                  <span className="flex items-center gap-1.5">
-                    <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                    Thinking…
-                  </span>
-                ) : "Suggest what to say"}
-              </button>
-            </div>
-            <p id="ai-desc" className="text-xs text-[var(--t-muted)] mb-3">
-              {aiBlocked
-                ? "AI suggestions are off — a do-not-call request was recorded for this call."
-                : !hasCapturedThisStage
-                ? "Tap an outcome or add text at this stage first."
-                : "Sends stage context to Gemini. Result shown below — never inserted automatically."}
-            </p>
-            {aiError && aiError.stage === currentStage && (
-              <div className="ws-alert ws-alert--error" role="alert">
-                <strong>AI error:</strong> {aiError.message}
-              </div>
-            )}
-            {aiResult && aiResult.stage === currentStage && (
-              <div className="ws-ai-result" role="status" aria-live="polite">
-                <p className="ws-ai-label">AI · {aiResult.model} · not the prospect&apos;s words</p>
-                <p className="text-sm text-[var(--t-primary)] whitespace-pre-wrap leading-relaxed">{aiResult.text}</p>
-              </div>
-            )}
-          </section>
-
-          {/* Save status */}
-          <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--t-muted)]" aria-live="polite">
-            <span className={saveStatuses[currentStage] === "error" ? "text-red-700 font-medium" : ""}>
-              {saveStatuses[currentStage] === "saving" && "Saving…"}
-              {saveStatuses[currentStage] === "saved" && "✓ Saved"}
-              {saveStatuses[currentStage] === "pending" && "Unsaved changes…"}
-              {saveStatuses[currentStage] === "error" && "Not saved — tap Retry"}
-              {saveStatuses[currentStage] === "idle" && "No unsaved changes"}
-            </span>
-            {saveStatuses[currentStage] === "error" && (
-              <button type="button" className="text-amber-700 underline hover:text-amber-800 font-medium"
-                onClick={() => void persistStage(currentStage)}>
-                Retry
-              </button>
-            )}
-            {saveError && saveStatuses[currentStage] !== "error" && (
-              <span className="text-red-700">{saveError}</span>
-            )}
-          </div>
-        </div>
-
-        {/* Stage navigation buttons */}
-        <div className="flex flex-col sm:flex-row gap-3 pt-6 border-t border-[var(--border)]">
-          <button type="button" className="ws-btn ws-btn--ghost" disabled={currentStage === 0}
-            onClick={() => void goToStage(currentStage - 1)}>
-            ← Back
-          </button>
-          <div className="flex flex-col sm:flex-row gap-3 flex-1">
-            <button type="button" className="ws-btn ws-btn--outline-danger"
-              onClick={openClosePanel}>
-              End call
-            </button>
-            {currentStage < stages.length - 1 && (
-              <button type="button" className="ws-btn ws-btn--primary flex-1"
-                onClick={() => void goToStage(currentStage + 1)}>
-                Next: {stages[currentStage + 1].title} →
-              </button>
-            )}
-            {currentStage === stages.length - 1 && (
-              <button type="button" className="ws-btn ws-btn--primary flex-1"
-                onClick={openClosePanel}>
-                Review and finish
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render branches
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // Load error (non-404) — key was preserved; offer retry or start fresh
-  if (loadError && !call) {
+  if (isLoading) {
     return (
-      <div className="ws-center-screen">
-        <div className="ws-card ws-card--centered p-8 max-w-lg w-full">
-          <div className="ws-icon-circle ws-icon-circle--warn mb-4 mx-auto">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
-          </div>
-          <h1 className="ws-panel-heading text-center">Could not restore the call</h1>
-          <p className="ws-body-muted text-center mt-2 mb-6" role="alert">{loadError}</p>
-          <div className="flex flex-col gap-3">
-            <button type="button" className="ws-btn ws-btn--primary w-full" onClick={retryLoad}>Retry loading</button>
-            <button type="button" className="ws-btn ws-btn--ghost w-full" onClick={startAnotherCall}>Start a new call instead</button>
-          </div>
+      <div className="flex min-h-screen items-center justify-center bg-slate-900 text-white">
+        <div className="text-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent mx-auto mb-4"></div>
+          <p className="text-slate-400">Loading call session...</p>
         </div>
       </div>
     );
   }
 
-  // Start-call form
-  if (!call) {
+  // Pre-Call Screen: Form to initiate call
+  if (!activeCall) {
     return (
-      <div className="ws-center-screen">
-        <div className="ws-card p-8 md:p-10 max-w-xl w-full">
-          <h1 className="ws-panel-heading mb-1">Start a call</h1>
-          <p className="ws-body-muted mb-8">
-            Enter the prospect&apos;s details. The call record is created immediately when you press Start.
+      <div className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-slate-800 border border-slate-700 rounded-xl p-8 shadow-2xl">
+          <h1 className="text-2xl font-bold text-white mb-2">Start a New Call</h1>
+          <p className="text-slate-400 text-sm mb-6">
+            Enter caller details to initialize a brand new session.
           </p>
 
-          {loading && !loadError && (
-            <div className="ws-notice ws-notice--info mb-6" role="status">
-              <svg className="animate-spin w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-              Checking for a call in progress…
+          {errorMessage && (
+            <div className="mb-4 p-3 bg-red-900/50 border border-red-500 rounded text-red-200 text-sm">
+              {errorMessage}
             </div>
           )}
 
-          {!serverReady && (
-            <div className="ws-notice ws-notice--warn mb-6" role="status">
-              <div>
-                <p className="font-semibold">Server warming up…</p>
-                <p className="text-sm mt-0.5">The API is starting (cold start on free tier). This can take up to a minute — we&apos;ll retry automatically.</p>
-                <div className="mt-2 h-1.5 w-full bg-amber-100 rounded-full overflow-hidden">
-                  <div className={`h-full bg-amber-400 rounded-full ${reduceMotion ? "w-full" : "animate-pulse w-full"}`} />
-                </div>
-              </div>
-            </div>
-          )}
-
-          <form className="space-y-5" onSubmit={startCall} noValidate>
+          <form onSubmit={handleStartCallClick} className="space-y-4">
             <div>
-              <label className="ws-label" htmlFor="prospect-name">
-                Prospect name <span className="text-red-500" aria-hidden="true">*</span>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                Caller Name / Contact
               </label>
-              <input id="prospect-name" className="ws-input" autoComplete="name" maxLength={4000} required
-                value={prospectName} onChange={(e) => setProspectName(e.target.value)} />
-            </div>
-            <div>
-              <label className="ws-label" htmlFor="company">
-                Company <span className="text-red-500" aria-hidden="true">*</span>
-              </label>
-              <input id="company" className="ws-input" autoComplete="organization" maxLength={4000} required
-                value={company} onChange={(e) => setCompany(e.target.value)} />
-            </div>
-            <div>
-              <label className="ws-label" htmlFor="prospect-role">
-                Role <span className="font-normal text-[var(--t-muted)]">· optional</span>
-              </label>
-              <input id="prospect-role" className="ws-input" maxLength={4000}
-                value={role} onChange={(e) => setRole(e.target.value)} />
+              <input
+                type="text"
+                value={callerName}
+                onChange={(e) => setCallerName(e.target.value)}
+                placeholder="e.g. John Doe"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500"
+                required
+              />
             </div>
 
-            {startError && (
-              <div className="ws-alert ws-alert--error" role="alert">
-                <p>{startError}</p>
-                {startDncCallId && (
-                  <p className="mt-2">
-                    <Link href={`/history/${encodeURIComponent(startDncCallId)}`} className="font-medium underline">
-                      View the earlier call →
-                    </Link>
-                  </p>
-                )}
-              </div>
-            )}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                Phone Number
+              </label>
+              <input
+                type="text"
+                value={callerPhone}
+                onChange={(e) => setCallerPhone(e.target.value)}
+                placeholder="+1 (555) 000-0000"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500"
+              />
+            </div>
 
-            <button type="submit" className="ws-btn ws-btn--primary ws-btn--lg w-full"
-              disabled={loading || !serverReady}>
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                  Starting…
-                </span>
-              ) : !serverReady ? "Server starting up…" : "Start call"}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                Company / Organization
+              </label>
+              <input
+                type="text"
+                value={company}
+                onChange={(e) => setCompany(e.target.value)}
+                placeholder="Acme Corp"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full mt-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white font-semibold py-3 rounded-lg transition-colors shadow-lg"
+            >
+              {isLoading ? 'Creating Session...' : 'Start Call Session'}
             </button>
           </form>
-
-          <p className="mt-5 text-xs text-[var(--t-muted)] text-center">
-            Call details are saved to the database. If saving fails, the form stays filled.
-          </p>
-
-          <div className="mt-6 pt-5 border-t border-[var(--border)]">
-            <p className="text-sm text-[var(--t-muted)] text-center mb-3">Have a previous call?</p>
-            <Link href="/history" className="ws-btn ws-btn--ghost w-full">
-              View call history
-            </Link>
-          </div>
         </div>
       </div>
     );
   }
 
-  // Completed / ended-early screen
-  if (call.status !== "in_progress") {
-    const finalOutcome = finalOutcomes.find((o) => o.key === call.outcome);
-    const nextStepText = [call.next_step_type, call.next_step_when, call.next_step_channel, call.next_step_detail]
-      .filter(Boolean).join(" · ");
-
-    return (
-      <div className="ws-center-screen py-12">
-        <div className="ws-card p-8 max-w-2xl w-full">
-          {/* Status */}
-          <div className="flex items-center gap-3 mb-6">
-            <div className={`ws-icon-circle ${call.status === "completed" ? "ws-icon-circle--success" : "ws-icon-circle--info"}`}>
-              {call.status === "completed"
-                ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-                : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-              }
-            </div>
-            <div>
-              <h1 className="ws-panel-heading">
-                {call.status === "completed" ? "Call completed" : "Call ended early"}
-              </h1>
-              <p className="ws-body-muted text-sm">Stage {call.last_stage}: {stages[call.last_stage - 1]?.title}</p>
-            </div>
-          </div>
-
-          {/* Summary */}
-          <dl className="ws-summary-grid mb-6">
-            <div>
-              <dt className="ws-eyebrow mb-0.5">Prospect</dt>
-              <dd className="font-medium text-[var(--t-primary)]">{call.prospect_name}</dd>
-            </div>
-            <div>
-              <dt className="ws-eyebrow mb-0.5">Company</dt>
-              <dd className="font-medium text-[var(--t-primary)]">{call.company}</dd>
-            </div>
-            <div>
-              <dt className="ws-eyebrow mb-0.5">Outcome</dt>
-              <dd className={`font-medium ${call.do_not_call ? "text-red-700" : "text-[var(--t-primary)]"}`}>
-                {finalOutcome?.label ?? "Not recorded"}
-                {call.do_not_call && <span className="ml-2 ws-badge ws-badge--restricted">Restricted</span>}
-              </dd>
-            </div>
-            <div>
-              <dt className="ws-eyebrow mb-0.5">Next step</dt>
-              <dd className="font-medium text-[var(--t-primary)]">{nextStepText || "None recorded"}</dd>
-            </div>
-          </dl>
-
-          {/* Stage 5 words */}
-          <div className="mb-6">
-            <p className="ws-eyebrow mb-1">Stage 5 · Their exact words</p>
-            <blockquote className="ws-verbatim">
-              {drafts[4].words || <em className="text-[var(--t-muted)]">No words recorded.</em>}
-            </blockquote>
-          </div>
-
-          {/* Persistence confirmation */}
-          <div className="ws-notice ws-notice--success mb-6" role="status">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-            <span>
-              Saved to the database.{" "}
-              <Link href="/history" className="font-semibold underline hover:opacity-80">View in History →</Link>
-            </span>
-          </div>
-
-          <div className="flex flex-wrap gap-3">
-            <button type="button" className="ws-btn ws-btn--primary" onClick={startAnotherCall}>
-              Start another call
-            </button>
-            <Link href="/history" className="ws-btn ws-btn--ghost">
-              Go to History
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ─── Active call workspace ────────────────────────────────────────────────
-
+  // Active Call Workspace
   return (
-    <div className="ws-root">
-      {/* Call-specific sub-header (no logo — already in global nav) */}
-      <div className="ws-call-bar">
-        <div className="container flex items-center justify-between gap-4 h-full">
-          <div className="min-w-0">
-            <p className="font-semibold text-sm text-[var(--t-primary)] truncate">
-              {call.prospect_name} · {call.company}
-              {call.prospect_role ? ` · ${call.prospect_role}` : ""}
-            </p>
-            <p className="text-xs text-[var(--t-muted)]">Active call</p>
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <Link href="/history" className="ws-btn ws-btn--ghost ws-btn--sm hidden sm:inline-flex">History</Link>
-            {call.do_not_call && (
-              <span className="ws-badge ws-badge--restricted">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>
-                Do not call
-              </span>
-            )}
-            <span className="ws-timer" aria-label={`Call duration ${formatDuration(call.started_at, now)}`}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              {formatDuration(call.started_at, now)}
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+      {/* Top Header & Status Bar */}
+      <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-3">
+            <span className="h-3 w-3 rounded-full bg-emerald-500 animate-pulse"></span>
+            <h1 className="text-lg font-bold text-white">
+              Active Call: {activeCall.callerName || 'Unknown Caller'}
+            </h1>
+            <span className="text-xs bg-slate-800 border border-slate-700 text-slate-300 px-2.5 py-0.5 rounded-full font-mono">
+              ID: {activeCall.id.slice(0, 8)}
             </span>
           </div>
+          <p className="text-xs text-slate-400 mt-0.5">
+            {activeCall.company ? `${activeCall.company} • ` : ''}
+            {activeCall.callerPhone || 'No phone provided'}
+          </p>
         </div>
-      </div>
 
-      {/* Tips banner */}
-      {showTips && (
-        <div className="ws-tips-bar">
-          <div className="container flex items-center justify-between gap-3 py-2.5">
-            <p className="text-sm font-medium text-amber-900 flex items-center gap-2">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-              Tap an outcome, add notes, then Next. Use &ldquo;Their words&rdquo; for verbatim quotes only.
-            </p>
-            <button type="button" className="text-xs text-amber-700 hover:text-amber-900 font-medium underline flex-shrink-0"
-              aria-label="Dismiss tip" onClick={dismissTips}>Dismiss</button>
+        {/* Timer Display */}
+        <div className="flex items-center gap-6">
+          <div className="bg-slate-950 border border-slate-800 px-4 py-1.5 rounded-lg text-center">
+            <span className="text-xs uppercase font-semibold text-slate-500 block">Duration</span>
+            <span className="text-xl font-mono font-bold text-emerald-400">
+              {formatTime(timerSeconds)}
+            </span>
           </div>
+
+          <button
+            onClick={handleCancelWorkspace}
+            className="text-xs text-slate-400 hover:text-white px-3 py-2 rounded border border-slate-800 hover:border-slate-700"
+          >
+            Exit Workspace
+          </button>
         </div>
-      )}
+      </header>
 
-      {/* Main layout */}
-      <div className="container ws-workspace-grid">
-        {/* Sidebar */}
-        <nav aria-label="Call stages" className="ws-sidebar">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-[var(--t-primary)]">Stages</h2>
-            <span className="text-xs text-[var(--t-muted)]">{currentStage + 1}/{stages.length}</span>
-          </div>
-          <ol className="space-y-1">
-            {stages.map((stage, index) => {
-              const current = index === currentStage;
-              const visited = index < call.last_stage;
-              const done = visited && !current;
-              const locked = !visited && index !== call.last_stage;
+      {/* Main Workspace Body */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left Column: Stage Progress Bar */}
+        <aside className="w-72 bg-slate-900/50 border-r border-slate-800 p-4 overflow-y-auto">
+          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">
+            Workflow Stages
+          </h2>
+          <div className="space-y-2">
+            {STAGES.map((s) => {
+              const isActive = s.id === currentStage;
+              const isPassed = s.id < currentStage;
+
               return (
-                <li key={stage.title}>
-                  <button
-                    type="button"
-                    aria-current={current ? "step" : undefined}
-                    disabled={locked}
-                    onClick={() => void goToStage(index)}
-                    className={[
-                      "ws-stage-btn",
-                      current ? "ws-stage-btn--current" : "",
-                      done ? "ws-stage-btn--done" : "",
-                      locked ? "ws-stage-btn--locked" : "",
-                    ].filter(Boolean).join(" ")}
-                  >
-                    <span className={[
-                      "ws-stage-num",
-                      current ? "ws-stage-num--current" : "",
-                      done ? "ws-stage-num--done" : "",
-                    ].filter(Boolean).join(" ")} aria-hidden="true">
-                      {done ? "✓" : index + 1}
+                <div
+                  key={s.id}
+                  onClick={() => s.id <= currentStage && setCurrentStage(s.id)}
+                  className={`p-3 rounded-lg border text-left transition-all cursor-pointer ${isActive
+                      ? 'bg-blue-600/20 border-blue-500 text-white'
+                      : isPassed
+                        ? 'bg-slate-800/40 border-slate-800 text-slate-300'
+                        : 'bg-slate-950/40 border-slate-900 text-slate-600'
+                    }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-semibold">
+                    <span>
+                      {s.id}. {s.name}
                     </span>
-                    <span className="text-sm font-medium truncate">{stage.title}</span>
-                  </button>
-                </li>
+                    {isPassed && <span className="text-emerald-400">✓</span>}
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1 line-clamp-1">{s.desc}</p>
+                </div>
               );
             })}
-          </ol>
-        </nav>
+          </div>
+        </aside>
 
-        {/* Stage card */}
-        <section className="ws-stage-card" aria-labelledby="stage-heading">
-          {closeOpen ? closePanel : mainContent}
-        </section>
+        {/* Center Panel: Active Stage Work Area */}
+        <main className="flex-1 p-6 overflow-y-auto flex flex-col justify-between bg-slate-950">
+          <div>
+            {errorMessage && (
+              <div className="mb-4 p-3 bg-red-900/40 border border-red-500 rounded-lg text-red-200 text-sm flex justify-between items-center">
+                <span>{errorMessage}</span>
+                <button
+                  onClick={() => setErrorMessage(null)}
+                  className="text-xs text-red-400 hover:text-white font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Stage Title & Header */}
+            <div className="mb-6">
+              <span className="text-xs font-bold uppercase tracking-widest text-blue-400">
+                Stage {currentStage} of 8
+              </span>
+              <h2 className="text-2xl font-bold text-white mt-1">
+                {STAGES[currentStage - 1].name}
+              </h2>
+              <p className="text-sm text-slate-400">{STAGES[currentStage - 1].desc}</p>
+            </div>
+
+            {/* Stage 8 Specific Outcome Options */}
+            {currentStage === 8 ? (
+              <div className="space-y-6 bg-slate-900 p-6 border border-slate-800 rounded-xl">
+                <h3 className="text-sm font-semibold text-white">Select Call Outcome</h3>
+                {validationErrors.outcome && (
+                  <p className="text-xs text-red-400">{validationErrors.outcome}</p>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {OUTCOME_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setSelectedOutcome(opt.id)}
+                      className={`p-3.5 rounded-lg border text-left font-medium text-sm transition-all ${selectedOutcome === opt.id
+                          ? 'bg-blue-600 border-blue-400 text-white shadow-lg'
+                          : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
+                        }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Follow-Up Date Input if Required */}
+                {OUTCOME_OPTIONS.find((o) => o.id === selectedOutcome)?.requireFollowUp && (
+                  <div className="mt-4">
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Required Follow-Up Date
+                    </label>
+                    <input
+                      type="date"
+                      value={followUpDate}
+                      onChange={(e) => setFollowUpDate(e.target.value)}
+                      className="bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                    />
+                    {validationErrors.followUpDate && (
+                      <p className="text-xs text-red-400 mt-1">{validationErrors.followUpDate}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Standard Stage Form Inputs */
+              <div className="space-y-4 bg-slate-900/60 p-6 border border-slate-800 rounded-xl">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                    Stage Notes & Actions Taken
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Record key details, customer requests, or actions taken during this stage..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Bottom Action Control Bar */}
+          <footer className="mt-8 pt-4 border-t border-slate-800 flex items-center justify-between">
+            <button
+              onClick={handlePreviousStage}
+              disabled={currentStage <= 1 || isSaving || isEnding}
+              className="px-5 py-2.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent text-sm font-medium transition-colors"
+            >
+              ← Previous Stage
+            </button>
+
+            <div className="flex items-center gap-3">
+              {currentStage < 8 ? (
+                <button
+                  onClick={handleNextStage}
+                  disabled={isSaving}
+                  className="bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors shadow-lg"
+                >
+                  {isSaving ? 'Saving...' : 'Save & Continue →'}
+                </button>
+              ) : (
+                <button
+                  onClick={handleEndCallClick}
+                  disabled={isEnding}
+                  className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 text-white px-8 py-2.5 rounded-lg text-sm font-semibold transition-colors shadow-lg flex items-center gap-2"
+                >
+                  {isEnding ? (
+                    <>
+                      <span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      Saving & Ending Call...
+                    </>
+                  ) : (
+                    'End Call & Complete'
+                  )}
+                </button>
+              )}
+            </div>
+          </footer>
+        </main>
       </div>
     </div>
   );
 }
-
-export default Workspace;
