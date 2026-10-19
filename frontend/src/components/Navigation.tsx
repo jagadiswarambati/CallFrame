@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const navItems = [
+  { href: "/history", label: "History" },
   { href: "/how-it-works", label: "How It Works" },
   { href: "/features", label: "Features" },
   { href: "/help", label: "Help" },
@@ -30,7 +31,7 @@ export default function Navigation() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`nav-link ${pathname === item.href ? "nav-link--active" : ""}`}
+                className={`nav-link ${pathname === item.href || (pathname ?? "").startsWith(`${item.href}/`) ? "nav-link--active" : ""}`}
               >
                 {item.label}
               </Link>
@@ -62,7 +63,7 @@ export default function Navigation() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`nav-link ${pathname === item.href ? "nav-link--active" : ""}`}
+                className={`nav-link ${pathname === item.href || (pathname ?? "").startsWith(`${item.href}/`) ? "nav-link--active" : ""}`}
               >
                 {item.label}
               </Link>

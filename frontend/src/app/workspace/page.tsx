@@ -1335,6 +1335,9 @@ function Workspace() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <Link href="/history" className="btn btn--secondary btn--sm">
+              History
+            </Link>
             {call.do_not_call && (
               <span className="badge badge--restricted">⚠ Do not call</span>
             )}
