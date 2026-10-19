@@ -1,0 +1,55 @@
+name: Stale issues and pull requests
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure stale label exists
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const label = "stale";
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+                color: "ededed",
+                description: "Issue or pull request flagged as inactive",
+              });
+            }
+
+      - name: Mark and close inactive issues and pull requests
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93
+        with:
+          days-before-issue-stale: 60
+          days-before-pr-stale: 60
+          days-before-issue-close: 14
+          days-before-pr-close: 14
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: pinned, security, in-progress
+          exempt-pr-labels: pinned, security, in-progress
+          remove-stale-when-updated: true
+          delete-branch: false
+          stale-issue-message: This issue has been inactive for 60 days. It will be closed in 14 days unless updated.
+          stale-pr-message: This pull request has been inactive for 60 days. It will be closed in 14 days unless updated.
+          close-issue-message: Closing this issue because it has remained inactive.
+          close-pr-message: Closing this pull request because it has remained inactive.
