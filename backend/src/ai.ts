@@ -2,11 +2,15 @@
 // Deliberately free of express/pg imports so it can be unit-tested with fakes.
 // Gemini is called with plain fetch (the legacy @google/generative-ai SDK is deprecated by Google).
 
+import { DNC_OUTCOME_KEY, isBlockedByDnc, latestByStage } from "./rules";
+
+// The do-not-call and latest-revision rules live in ./rules (pure, unit-tested); re-exported for callers.
+export { DNC_OUTCOME_KEY, isBlockedByDnc, latestByStage };
+
 export const MAX_WORDS = 40;
 export const AI_TIMEOUT_MS = 9_000;
 export const RATE_LIMIT_MAX = 10;
 export const RATE_LIMIT_WINDOW_MS = 60_000;
-export const DNC_OUTCOME_KEY = "asked_not_to_call";
 export const BLOCKED_MESSAGE = "They asked not to be called. End the call politely.";
 
 export const STAGE_INFO = [
@@ -59,23 +63,7 @@ export function normalizeApiKey(raw: string | undefined): string | undefined {
   return value ? value : undefined;
 }
 
-// ---------------------------------------------------------------- do-not-call
-
-export function isBlockedByDnc(call: Pick<CallRow, "do_not_call">, stageRows: Pick<StageRow, "outcome_key">[]) {
-  return call.do_not_call === true || stageRows.some((row) => row.outcome_key === DNC_OUTCOME_KEY);
-}
-
 // ---------------------------------------------------------------- context + prompt
-
-// Latest revision per stage (rows may arrive in any order).
-export function latestByStage(rows: StageRow[]): Map<number, StageRow> {
-  const latest = new Map<number, StageRow>();
-  for (const row of rows) {
-    const current = latest.get(row.stage);
-    if (!current || row.revision > current.revision) latest.set(row.stage, row);
-  }
-  return latest;
-}
 
 export function hasCapturedContent(row: StageRow | undefined) {
   return Boolean(row && (row.outcome_key || row.prospect_words.trim() || row.notes.trim()));

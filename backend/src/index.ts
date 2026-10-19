@@ -13,6 +13,18 @@ import {
   type CallRow,
   type StageRow,
 } from "./ai";
+import {
+  displayStatus,
+  isOutcome,
+  latestRevisions,
+  reachedStage,
+  statusFromStage,
+  validateCloseOutcome,
+  validateDoNotCallEvidence,
+  type CallStatus,
+  type FieldError,
+  type Outcome,
+} from "./rules";
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
@@ -51,21 +63,7 @@ process.on("unhandledRejection", (reason) => {
 // If set, every /api route requires the x-access-code header. Unset or blank = open API.
 const accessCode = process.env.APP_ACCESS_CODE?.trim() || undefined;
 
-const outcomes = new Set([
-  "next_step_set",
-  "document_requested",
-  "callback_requested",
-  "referred",
-  "declined",
-  "wrong_contact",
-  "no_contact",
-  "do_not_call",
-]);
-
-// Outcomes that end the conversation without agreeing anything: no next step may be recorded.
-const noNextStepOutcomes = new Set(["declined", "wrong_contact", "no_contact"]);
-
-type FieldError = { field: string; message: string };
+// Outcome, status, do-not-call and revision rules live in ./rules (pure and unit-tested).
 
 function sendError(
   response: Response,
@@ -241,12 +239,7 @@ app.get("/api/calls", async (request, response) => {
       pool.query(
         `SELECT id, prospect_name, company, prospect_role, status, last_stage,
                 outcome, next_step_type, next_step_channel, next_step_when, next_step_detail,
-                do_not_call, started_at, ended_at,
-                CASE
-                  WHEN status = 'in_progress' AND updated_at < now() - interval '2 hours'
-                    THEN 'abandoned'
-                  ELSE status
-                END AS display_status
+                do_not_call, started_at, ended_at, updated_at
          FROM calls
          ORDER BY started_at DESC
          LIMIT $1 OFFSET $2`,
@@ -254,8 +247,12 @@ app.get("/api/calls", async (request, response) => {
       ),
       pool.query("SELECT COUNT(*) FROM calls"),
     ]);
+    const now = Date.now();
     response.json({
-      calls: callsResult.rows,
+      calls: callsResult.rows.map((row) => ({
+        ...row,
+        display_status: displayStatus(row.status as CallStatus, row.updated_at, now),
+      })),
       limit,
       offset,
       total: Number(countResult.rows[0].count),
@@ -361,14 +358,7 @@ app.get("/api/calls/:id", async (request, response) => {
       sendError(response, 404, "NOT_FOUND", "Call not found.");
       return;
     }
-    // Rows arrive ordered by stage then newest revision first, so the first row seen
-    // for each stage is its latest revision.
-    const seenStages = new Set<number>();
-    const latestByStage = stageResult.rows.filter((row) => {
-      if (seenStages.has(row.stage)) return false;
-      seenStages.add(row.stage);
-      return true;
-    });
+    const latestByStage = latestRevisions(stageResult.rows);
     response.json({
       call: callResult.rows[0],
       stage_results: stageResult.rows,
@@ -514,8 +504,7 @@ app.post("/api/calls/:id/close", async (request, response) => {
       : {};
   const textFields = validateTextFields(nextStep, ["type", "channel", "when", "detail"]);
   if (
-    typeof body.outcome !== "string" ||
-    !outcomes.has(body.outcome) ||
+    !isOutcome(body.outcome) ||
     !Number.isInteger(endedStage) ||
     endedStage < 1 ||
     endedStage > 8
@@ -528,7 +517,7 @@ app.post("/api/calls/:id/close", async (request, response) => {
     return;
   }
 
-  const outcome = body.outcome;
+  const outcome = body.outcome as Outcome;
   const type =
     typeof nextStep.type === "string" && nextStep.type.trim()
       ? nextStep.type.trim()
@@ -540,29 +529,7 @@ app.post("/api/calls/:id/close", async (request, response) => {
     sendError(response, 422, "VALIDATION", "Check the next-step details.", textFields);
     return;
   }
-  const required: FieldError[] = [];
-  if (outcome === "next_step_set" && (!["call", "meeting"].includes(type ?? "") || !when?.trim())) {
-    required.push({ field: "next_step.when", message: "A call or meeting time is required." });
-  } else if (outcome === "document_requested" && (type !== "document" || !channel?.trim())) {
-    required.push({ field: "next_step.channel", message: "A communication channel is required." });
-  } else if (outcome === "callback_requested" && (type !== "call" || !when?.trim())) {
-    required.push({ field: "next_step.when", message: "A callback time is required." });
-  } else if (outcome === "referred" && (type !== "referral" || !detail?.trim())) {
-    required.push({ field: "next_step.detail", message: "Who they referred you to is required." });
-  } else if (
-    outcome === "do_not_call" &&
-    [type, channel, when, detail].some((value) => Boolean(value?.trim()))
-  ) {
-    required.push({ field: "next_step", message: "A do-not-call outcome cannot include a next step." });
-  } else if (
-    noNextStepOutcomes.has(outcome) &&
-    [type, channel, when, detail].some((value) => Boolean(value?.trim()))
-  ) {
-    required.push({
-      field: "next_step",
-      message: "A declined, wrong-contact or no-contact outcome cannot include a next step.",
-    });
-  }
+  const required = validateCloseOutcome(outcome, { type, channel, when, detail });
   if (required.length) {
     sendError(response, 422, "RULE_VIOLATION", "The selected outcome needs more information.", required);
     return;
@@ -576,13 +543,16 @@ app.post("/api/calls/:id/close", async (request, response) => {
   try {
     const result = await transaction(client, async () => {
       const callResult = await client.query(
-        "SELECT status FROM calls WHERE id = $1 FOR UPDATE",
+        "SELECT status, last_stage FROM calls WHERE id = $1 FOR UPDATE",
         [request.params.id],
       );
       if (!callResult.rowCount) throw new ApiError(404, "NOT_FOUND", "Call not found.");
       if (callResult.rows[0].status !== "in_progress") {
         throw new ApiError(409, "CALL_CLOSED", "This call is already closed.");
       }
+      // The call keeps the highest stage it reached; status follows from that stage (rules.ts).
+      const reached = reachedStage(Number(callResult.rows[0].last_stage), endedStage);
+      const finalStatus = statusFromStage(reached);
 
       let dncWords: string | null = null;
       if (outcome === "do_not_call") {
@@ -593,15 +563,13 @@ app.post("/api/calls/:id/close", async (request, response) => {
           [request.params.id],
         );
         const latestDnc = dncResult.rows[0];
-        if (
-          latestDnc?.outcome_key !== "asked_not_to_call" ||
-          !latestDnc.prospect_words?.trim()
-        ) {
+        const dncErrors = validateDoNotCallEvidence(latestDnc);
+        if (dncErrors.length) {
           throw new ApiError(
             422,
             "RULE_VIOLATION",
             "Record the explicit do-not-call request and exact words at Stage 6 first.",
-            [{ field: "dnc_words", message: "Stage 6 must contain the do-not-call selection and their exact words." }],
+            dncErrors,
           );
         }
         dncWords = latestDnc.prospect_words;
@@ -609,9 +577,8 @@ app.post("/api/calls/:id/close", async (request, response) => {
 
       const updated = await client.query(
         `UPDATE calls
-         SET last_stage = GREATEST(last_stage, $2::smallint),
-             status = CASE WHEN GREATEST(last_stage, $2::smallint) = 8
-                           THEN 'completed' ELSE 'ended_early' END,
+         SET last_stage = $2::smallint,
+             status = $10,
              outcome = $3,
              next_step_type = $4, next_step_channel = $5,
              next_step_when = $6, next_step_detail = $7,
@@ -622,7 +589,7 @@ app.post("/api/calls/:id/close", async (request, response) => {
                    do_not_call, dnc_words, ended_at`,
         [
           request.params.id,
-          endedStage,
+          reached,
           outcome,
           type,
           channel?.trim() || null,
@@ -630,6 +597,7 @@ app.post("/api/calls/:id/close", async (request, response) => {
           detail?.trim() || null,
           outcome === "do_not_call",
           dncWords,
+          finalStatus,
         ],
       );
       return updated.rows[0];

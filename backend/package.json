@@ -6,7 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "test": "tsx --test src/ai.test.ts"
+    "test": "tsx --test test/rules.test.ts src/ai.test.ts"
   },
   "engines": {
     "node": ">=20"
