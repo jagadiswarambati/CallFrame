@@ -216,7 +216,7 @@ export default function TermsPage() {
             Contact our legal team at the address above.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="/workspace" className="btn btn--primary btn--lg">
+            <Link href="/workspace?new=1" className="btn btn--primary btn--lg">
               Go to Workspace
             </Link>
             <Link href="/privacy" className="btn btn--secondary btn--lg">

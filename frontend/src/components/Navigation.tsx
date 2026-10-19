@@ -43,7 +43,12 @@ export default function Navigation() {
           </div>
 
           <div className="flex items-center gap-3">
-            <Link href="/workspace" className="btn btn--primary btn--sm hidden sm:inline-flex">
+            <Link href="/workspace?new=1" onClick={(event) => {
+              if (pathname === "/workspace") {
+                event.preventDefault();
+                if (window.confirm("Start a new call? The current call will remain in progress and can be resumed from History.")) window.location.assign("/workspace?new=1");
+              }
+            }} className="btn btn--primary btn--sm hidden sm:inline-flex">
               Start a Call
             </Link>
             <button
@@ -90,9 +95,15 @@ export default function Navigation() {
                 </Link>
               ))}
               <Link
-                href="/workspace"
+                href="/workspace?new=1"
                 className="btn btn--primary btn--sm mt-2 w-full justify-center"
-                onClick={closeMenu}
+                onClick={(event) => {
+                  closeMenu();
+                  if (pathname === "/workspace") {
+                    event.preventDefault();
+                    if (window.confirm("Start a new call? The current call will remain in progress and can be resumed from History.")) window.location.assign("/workspace?new=1");
+                  }
+                }}
               >
                 Start a Call
               </Link>

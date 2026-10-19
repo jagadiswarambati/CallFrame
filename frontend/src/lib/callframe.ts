@@ -1,254 +1,202 @@
-export interface CallSession {
+import { apiFetch, ApiError } from "@/lib/api";
+
+export type CallStatus = "in_progress" | "completed" | "ended_early";
+export type CallDisplayStatus = CallStatus | "abandoned";
+export type DisplayStatus = CallDisplayStatus;
+export const STATUS_LABELS: Record<DisplayStatus, string> = {
+  in_progress: "In progress",
+  completed: "Completed",
+  ended_early: "Ended early",
+  abandoned: "Abandoned",
+};
+export function outcomeInfo(outcome: string | null): { label: string; tone: "success" | "partial" | "negative" | "restricted" } | null {
+  if (!outcome) return null;
+  const labels: Record<string, { label: string; tone: "success" | "partial" | "negative" | "restricted" }> = {
+    next_step_set: { label: "Call or meeting agreed", tone: "success" },
+    document_requested: { label: "Document requested", tone: "partial" },
+    callback_requested: { label: "Callback requested", tone: "partial" },
+    referred: { label: "Referred to someone", tone: "partial" },
+    declined: { label: "Declined", tone: "negative" },
+    wrong_contact: { label: "Wrong contact", tone: "negative" },
+    no_contact: { label: "No contact", tone: "negative" },
+    do_not_call: { label: "Do not call", tone: "restricted" },
+  };
+  return labels[outcome] ?? null;
+}
+export type StageDraft = { outcomeKey: string | null; prospectWords: string; notes: string; revision?: number; createdAt?: string };
+export type StageHistoryEntry = StageDraft & { stage: number; revision: number; createdAt?: string };
+export type CallSession = {
   id: string;
-  callerName?: string;
-  callerPhone?: string;
-  callerEmail?: string;
-  company?: string;
-  currentStage: number; // 1 to 8
+  callerName: string;
+  company: string;
+  callerRole?: string | null;
+  currentStage: number;
+  lastStage: number;
   timerSeconds: number;
-  stageData: Record<number, Record<string, any>>;
+  stageData: Record<number, StageDraft>;
+  stageHistory: StageHistoryEntry[];
   notes: string;
-  outcome?: string;
-  followUpDate?: string;
-  status: 'active' | 'completed' | 'abandoned';
+  outcome?: string | null;
+  followUpDate?: string | null;
+  nextStepType?: string | null;
+  nextStepChannel?: string | null;
+  nextStepDetail?: string | null;
+  status: CallStatus;
+  displayStatus: CallDisplayStatus;
   createdAt: string;
   updatedAt: string;
+  startedAt: string;
+  endedAt?: string | null;
+  doNotCall: boolean;
+  dncWords?: string | null;
+  aiSuggestions: Array<{ id: number; stage: number; suggestion: string; created_at: string }>;
+};
+
+const ACTIVE_CALL_KEY = "callframe.activeCallId";
+const RESUME_CALL_KEY = "callframe.explicitResumeCallId";
+const CALL_DRAFT_PREFIX = "callframe_draft_";
+
+type ApiCall = Record<string, any>;
+type ApiStage = { stage: number; revision: number; outcome_key: string | null; prospect_words: string | null; notes: string | null; created_at?: string };
+type ApiCallDetails = { call: ApiCall; stage_results?: ApiStage[]; latest_by_stage?: ApiStage[]; ai_suggestions?: Array<Record<string, any>> };
+
+function storageGet(key: string): string | null {
+  if (typeof window === "undefined") return null;
+  try { return window.localStorage.getItem(key); } catch { return null; }
+}
+function storageSet(key: string, value: string | null) {
+  if (typeof window === "undefined") return;
+  try { if (value) window.localStorage.setItem(key, value); else window.localStorage.removeItem(key); } catch { /* storage is optional */ }
 }
 
-const ACTIVE_CALL_KEY = 'callframe_active_call_id';
-const CALL_DRAFT_PREFIX = 'callframe_draft_';
+export function getActiveCallId(): string | null { return storageGet(ACTIVE_CALL_KEY); }
+export function setActiveCallId(id: string | null): void { storageSet(ACTIVE_CALL_KEY, id); }
+export function getResumeCallId(): string | null { return storageGet(RESUME_CALL_KEY); }
+export function setResumeCallId(id: string | null): void { storageSet(RESUME_CALL_KEY, id); }
 
-/**
- * Gets the current active call ID stored in local cache.
- */
-export function getActiveCallId(): string | null {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem(ACTIVE_CALL_KEY);
-}
-
-/**
- * Sets the current active call ID in local cache.
- */
-export function setActiveCallId(id: string | null): void {
-  if (typeof window === 'undefined') return;
-  if (id) {
-    localStorage.setItem(ACTIVE_CALL_KEY, id);
-  } else {
-    localStorage.removeItem(ACTIVE_CALL_KEY);
-  }
-}
-
-/**
- * Saves local draft state for a call ID.
- */
 export function saveCallDraft(id: string, data: Partial<CallSession>): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(`${CALL_DRAFT_PREFIX}${id}`, JSON.stringify(data));
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(`${CALL_DRAFT_PREFIX}${id}`, JSON.stringify(data)); } catch { /* optional cache */ }
 }
-
-/**
- * Retrieves local draft state for a call ID.
- */
 export function getCallDraft(id: string): Partial<CallSession> | null {
-  if (typeof window === 'undefined') return null;
-  const raw = localStorage.getItem(`${CALL_DRAFT_PREFIX}${id}`);
+  const raw = storageGet(`${CALL_DRAFT_PREFIX}${id}`);
   if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
+  try { return JSON.parse(raw) as Partial<CallSession>; } catch { return null; }
+}
+export function clearCallDraft(id: string): void { storageSet(`${CALL_DRAFT_PREFIX}${id}`, null); }
+
+function elapsedSeconds(startedAt?: string, endedAt?: string | null): number {
+  if (!startedAt) return 0;
+  const start = new Date(startedAt).getTime();
+  if (!Number.isFinite(start)) return 0;
+  const end = endedAt ? new Date(endedAt).getTime() : Date.now();
+  return Math.max(0, Math.floor((end - start) / 1000));
+}
+
+function mapCall(raw: ApiCall, stages: ApiStage[] = [], ai: Array<Record<string, any>> = [], allStages: ApiStage[] = []): CallSession {
+  const stageData: Record<number, StageDraft> = {};
+  for (const item of stages) {
+    stageData[Number(item.stage)] = {
+      outcomeKey: item.outcome_key ?? null,
+      prospectWords: item.prospect_words ?? "",
+      notes: item.notes ?? "",
+      revision: Number(item.revision),
+      createdAt: item.created_at,
+    };
   }
+  const startedAt = raw.started_at ?? raw.created_at ?? new Date().toISOString();
+  const endedAt = raw.ended_at ?? null;
+  const status = (raw.status ?? "in_progress") as CallStatus;
+  const displayStatus = (raw.display_status ?? raw.status ?? "in_progress") as CallDisplayStatus;
+  const lastStage = Number(raw.last_stage ?? 1);
+  const currentStage = Math.min(8, Math.max(1, lastStage));
+  return {
+    id: String(raw.id),
+    callerName: String(raw.prospect_name ?? ""),
+    company: String(raw.company ?? ""),
+    callerRole: raw.prospect_role ?? null,
+    currentStage,
+    lastStage,
+    timerSeconds: elapsedSeconds(startedAt, endedAt),
+    stageData,
+    stageHistory: allStages.map((item) => ({ stage: Number(item.stage), revision: Number(item.revision), outcomeKey: item.outcome_key ?? null, prospectWords: item.prospect_words ?? "", notes: item.notes ?? "", createdAt: item.created_at })),
+    notes: stageData[currentStage]?.notes ?? "",
+    outcome: raw.outcome ?? null,
+    followUpDate: raw.next_step_when ?? null,
+    nextStepType: raw.next_step_type ?? null,
+    nextStepChannel: raw.next_step_channel ?? null,
+    nextStepDetail: raw.next_step_detail ?? null,
+    status,
+    displayStatus,
+    createdAt: startedAt,
+    updatedAt: raw.updated_at ?? startedAt,
+    startedAt,
+    endedAt,
+    doNotCall: Boolean(raw.do_not_call),
+    dncWords: raw.dnc_words ?? null,
+    aiSuggestions: ai.map((item) => ({ id: Number(item.id), stage: Number(item.stage), suggestion: String(item.suggestion ?? ""), created_at: String(item.created_at ?? "") })),
+  };
 }
 
-/**
- * Purges draft state for a specific call ID.
- */
-export function clearCallDraft(id: string): void {
-  if (typeof window === 'undefined') return;
-  localStorage.removeItem(`${CALL_DRAFT_PREFIX}${id}`);
+export async function startNewCall(details: { name?: string; company?: string; role?: string }): Promise<CallSession> {
+  const payload = await apiFetch<{ call: ApiCall }>("/api/calls", {
+    method: "POST",
+    body: JSON.stringify({ prospect_name: details.name ?? "", company: details.company ?? "", prospect_role: details.role ?? "" }),
+  });
+  const call = mapCall(payload.call);
+  setActiveCallId(call.id);
+  setResumeCallId(null);
+  clearCallDraft(call.id);
+  return call;
 }
 
-/**
- * 1. Start a New Call Session
- */
-export async function startNewCall(callerDetails?: {
-  name?: string;
-  phone?: string;
-  email?: string;
-  company?: string;
-}): Promise<CallSession> {
-  // Purge any existing active call reference first
-  setActiveCallId(null);
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-  try {
-    const res = await fetch('/api/calls', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        callerName: callerDetails?.name || '',
-        callerPhone: callerDetails?.phone || '',
-        callerEmail: callerDetails?.email || '',
-        company: callerDetails?.company || '',
-        currentStage: 1,
-        status: 'active',
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      throw new Error(`Server returned ${res.status}: Failed to initialize new call`);
-    }
-
-    const newCall: CallSession = await res.json();
-    setActiveCallId(newCall.id);
-    clearCallDraft(newCall.id);
-    return newCall;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    throw error;
-  }
-}
-
-/**
- * 2. Fetch Call Details by ID
- */
 export async function fetchCallById(id: string): Promise<CallSession> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const payload = await apiFetch<ApiCallDetails>(`/api/calls/${encodeURIComponent(id)}`);
+  return mapCall(payload.call, payload.latest_by_stage ?? [], payload.ai_suggestions ?? [], payload.stage_results ?? []);
+}
 
+export async function saveStageProgress(id: string, payload: { stage: number; outcomeKey?: string | null; prospectWords?: string; notes?: string }): Promise<CallSession> {
+  await apiFetch<{ result: ApiStage }>(`/api/calls/${encodeURIComponent(id)}/stages/${payload.stage}`, {
+    method: "PUT",
+    body: JSON.stringify({ outcome_key: payload.outcomeKey ?? null, prospect_words: payload.prospectWords ?? "", notes: payload.notes ?? "" }),
+  });
+  const updated = await fetchCallById(id);
+  saveCallDraft(id, updated);
+  return updated;
+}
+
+export type NextStepPayload = { type?: string | null; channel?: string | null; when?: string | null; detail?: string | null };
+export async function endCallSession(id: string, payload: { outcome: string; endedStage: number; nextStep?: NextStepPayload }): Promise<CallSession> {
+  let result: { call: ApiCall };
   try {
-    const res = await fetch(`/api/calls/${id}`, {
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
+    result = await apiFetch<{ call: ApiCall }>(`/api/calls/${encodeURIComponent(id)}/close`, {
+      method: "POST",
+      body: JSON.stringify({ outcome: payload.outcome, ended_stage: payload.endedStage, next_step: payload.nextStep ?? {} }),
     });
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      throw new Error(`Failed to load call ${id}`);
-    }
-
-    const call: CallSession = await res.json();
-    return call;
   } catch (error) {
-    clearTimeout(timeoutId);
-    // Fallback to local draft if offline or API delay occurs
-    const draft = getCallDraft(id);
-    if (draft && draft.id) {
-      return draft as CallSession;
+    // A timeout can happen after the server has committed the close transaction but before
+    // the response reaches the browser. Re-read the authoritative record before offering retry.
+    const ambiguousNetworkFailure = error instanceof ApiError && ["TIMEOUT", "NETWORK", "ABORTED"].includes(error.code);
+    if (ambiguousNetworkFailure) {
+      const persisted = await fetchCallById(id).catch(() => null);
+      if (persisted && persisted.status !== "in_progress") {
+        setActiveCallId(null);
+        setResumeCallId(null);
+        clearCallDraft(id);
+        return persisted;
+      }
     }
     throw error;
   }
+  setActiveCallId(null);
+  setResumeCallId(null);
+  clearCallDraft(id);
+  return mapCall(result.call);
 }
 
-/**
- * 3. Save / Update Stage Progress
- */
-export async function saveStageProgress(
-  id: string,
-  payload: {
-    stage: number;
-    stageData: Record<string, any>;
-    notes?: string;
-    timerSeconds?: number;
-  }
-): Promise<CallSession> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-  try {
-    const res = await fetch(`/api/calls/${id}/stage`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      throw new Error('Failed to save stage data on server.');
-    }
-
-    const updated: CallSession = await res.json();
-    saveCallDraft(id, updated);
-    return updated;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    throw error;
-  }
-}
-
-/**
- * 4. End Call and Submit Final Outcome
- */
-export async function endCallSession(
-  id: string,
-  finalPayload: {
-    outcome: string;
-    followUpDate?: string;
-    notes?: string;
-    timerSeconds?: number;
-    stageData?: Record<number, Record<string, any>>;
-  }
-): Promise<CallSession> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-  try {
-    const res = await fetch(`/api/calls/${id}/end`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...finalPayload,
-        status: 'completed',
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      throw new Error('Server rejected call completion request.');
-    }
-
-    const completedCall: CallSession = await res.json();
-
-    // Remove active call references ONLY after confirmed backend completion
-    setActiveCallId(null);
-    clearCallDraft(id);
-
-    return completedCall;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    throw error;
-  }
-}
-
-/**
- * 5. Fetch Call History List
- */
 export async function fetchCallHistory(): Promise<CallSession[]> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-  try {
-    const res = await fetch('/api/calls', {
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      throw new Error('Failed to fetch call history from database');
-    }
-
-    const history: CallSession[] = await res.json();
-    return history;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    throw error;
-  }
+  const payload = await apiFetch<{ calls: ApiCall[]; total: number }>("/api/calls?limit=50&offset=0");
+  return payload.calls.map((call) => mapCall(call));
 }
+
+export { ApiError };

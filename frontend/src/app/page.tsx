@@ -130,7 +130,7 @@ export default function HomePage() {
               Callframe helps you guide conversations, understand prospect needs, capture their actual words, handle objections, and leave every call with a concrete next step.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 fade-in" style={{ animationDelay: '300ms' }}>
-              <Link href="/workspace" className="btn btn--primary btn--lg w-full sm:w-auto">
+              <Link href="/workspace?new=1" className="btn btn--primary btn--lg w-full sm:w-auto">
                 Start a Call
               </Link>
               <Link href="/how-it-works" className="btn btn--secondary btn--lg w-full sm:w-auto">
@@ -241,7 +241,7 @@ export default function HomePage() {
           </div>
 
           <div className="text-center mt-12">
-            <Link href="/workspace" className="btn btn--accent btn--lg inline-flex">
+            <Link href="/workspace?new=1" className="btn btn--accent btn--lg inline-flex">
               Try It Now
             </Link>
           </div>
@@ -258,7 +258,7 @@ export default function HomePage() {
               Open the workspace, start a call, and see the difference structure makes.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <Link href="/workspace" className="btn btn--primary btn--lg w-full sm:w-auto">
+              <Link href="/workspace?new=1" className="btn btn--primary btn--lg w-full sm:w-auto">
                 Start a Call
               </Link>
               <Link href="/how-it-works" className="btn btn--secondary btn--lg w-full sm:w-auto">

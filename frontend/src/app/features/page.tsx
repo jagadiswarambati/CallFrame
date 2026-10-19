@@ -267,7 +267,7 @@ export default function FeaturesPage() {
             The best way to understand Callframe is to use it.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="/workspace" className="btn btn--primary btn--lg">
+            <Link href="/workspace?new=1" className="btn btn--primary btn--lg">
               Start a Call
             </Link>
             <Link href="/how-it-works" className="btn btn--secondary btn--lg">

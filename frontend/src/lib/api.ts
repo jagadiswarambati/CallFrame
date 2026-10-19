@@ -4,8 +4,8 @@
 
 export const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000").replace(/\/$/, "");
 
-// Default timeout for mutating requests (POST/PUT/PATCH). GET requests use the browser default
-// because they are retried and the user is not blocked by them.
+// Requests use a finite timeout so loading screens cannot spin indefinitely when the API hangs.
+// A supplied AbortSignal (for example, from a React effect cleanup) is respected.
 export const MUTATING_TIMEOUT_MS = 12_000;
 
 export const ACCESS_CODE_STORAGE_KEY = "callframe.accessCode";
@@ -96,13 +96,10 @@ async function requestOnce<T>(path: string, init: RequestInit): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const mayRetry = method === "GET" || method === "HEAD";
 
-  // Mutating requests get a hard timeout so a dropped connection never leaves the UI stuck.
-  // GET/HEAD are not timed out here because they are retried on network error and the caller
-  // can pass its own AbortSignal (e.g. from an AbortController in a useEffect cleanup).
+  // Every request gets a hard timeout unless the caller supplies its own AbortSignal.
+  // This also prevents History/detail loading states from waiting forever on a stuck GET.
   let signal = init.signal ?? undefined;
-  if (!mayRetry && !signal) {
-    signal = AbortSignal.timeout(MUTATING_TIMEOUT_MS);
-  }
+  if (!signal) signal = AbortSignal.timeout(MUTATING_TIMEOUT_MS);
 
   const request: RequestInit = { ...init, headers, signal };
 

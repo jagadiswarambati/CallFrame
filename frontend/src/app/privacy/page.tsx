@@ -186,7 +186,7 @@ export default function PrivacyPage() {
             Your data stays yours. Start a call in the workspace.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="/workspace" className="btn btn--primary btn--lg">
+            <Link href="/workspace?new=1" className="btn btn--primary btn--lg">
               Start a Call
             </Link>
             <Link href="/terms" className="btn btn--secondary btn--lg">

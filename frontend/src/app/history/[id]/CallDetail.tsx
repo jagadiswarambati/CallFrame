@@ -2,135 +2,37 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { CallSession, fetchCallById, setActiveCallId } from '@/lib/callframe';
+import { useParams, useRouter } from 'next/navigation';
+import { CallSession, fetchCallById, setResumeCallId } from '@/lib/callframe';
+import { stages } from '@/lib/stages';
 
-export default function CallDetail({ id }: { id: string }) {
+export default function CallDetail() {
   const router = useRouter();
+  const params = useParams<{ id: string }>();
+  const id = params.id;
   const [call, setCall] = useState<CallSession | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
   useEffect(() => {
-    setIsLoading(true);
-    fetchCallById(id)
-      .then(setCall)
-      .catch((err: any) => {
-        setErrorMessage(err.message || 'Failed to load call detail record.');
-      })
-      .finally(() => setIsLoading(false));
+    let alive = true;
+    fetchCallById(id).then((value) => { if (alive) setCall(value); }).catch((error: unknown) => { if (alive) setErrorMessage(error instanceof Error ? error.message : 'Could not load the call.'); }).finally(() => { if (alive) setIsLoading(false); });
+    return () => { alive = false; };
   }, [id]);
+  const resume = () => { if (!call || call.status !== 'in_progress') return; setResumeCallId(call.id); router.push(`/workspace?resume=${encodeURIComponent(call.id)}`); };
 
-  const handleResume = () => {
-    if (!call) return;
-    setActiveCallId(call.id);
-    router.push('/workspace');
-  };
+  if (isLoading) return <div className="p-12 text-center text-slate-500">Loading call details…</div>;
+  if (errorMessage || !call) return <div className="mx-auto max-w-3xl px-4 py-12"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800">{errorMessage ?? 'Call not found.'}<div><Link href="/history" className="mt-4 inline-block font-semibold underline">Back to History</Link></div></div></div>;
+  const statusLabel = ({ in_progress: 'In progress', completed: 'Completed', ended_early: 'Ended early', abandoned: 'Abandoned' } as const)[call.displayStatus];
+  const duration = `${Math.floor(call.timerSeconds / 60).toString().padStart(2, '0')}:${(call.timerSeconds % 60).toString().padStart(2, '0')}`;
 
-  const formatDuration = (secs: number) => {
-    if (!secs) return '00:00';
-    const m = Math.floor(secs / 60).toString().padStart(2, '0');
-    const s = (secs % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
-
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent mx-auto mb-4"></div>
-          <p className="text-slate-400">Loading call record detail...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (errorMessage || !call) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-white p-8 flex items-center justify-center">
-        <div className="max-w-md w-full bg-slate-900 border border-slate-800 p-6 rounded-xl text-center">
-          <p className="text-red-400 mb-4">{errorMessage || 'Call record not found.'}</p>
-          <Link
-            href="/history"
-            className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm inline-block"
-          >
-            ← Back to History
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-8 max-w-4xl mx-auto">
-      <div className="flex justify-between items-center mb-8">
-        <Link
-          href="/history"
-          className="text-xs text-slate-400 hover:text-white border border-slate-800 px-3 py-1.5 rounded-lg"
-        >
-          ← Back to Call History
-        </Link>
-        {call.status === 'active' && (
-          <button
-            onClick={handleResume}
-            className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-semibold"
-          >
-            Resume Call Session
-          </button>
-        )}
-      </div>
-
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 mb-6">
-        <div className="flex justify-between items-start mb-4">
-          <div>
-            <h1 className="text-2xl font-bold text-white">{call.callerName || 'Unnamed Caller'}</h1>
-            <p className="text-sm text-slate-400 mt-1">
-              {call.company ? `${call.company} • ` : ''}
-              {call.callerPhone || 'No phone provided'}
-            </p>
-          </div>
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-semibold capitalize ${call.status === 'completed'
-                ? 'bg-emerald-900/50 text-emerald-300 border border-emerald-700'
-                : 'bg-amber-900/50 text-amber-300 border border-amber-700'
-              }`}
-          >
-            {call.status}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t border-slate-800 text-sm">
-          <div>
-            <span className="text-xs text-slate-500 uppercase block font-semibold">Duration</span>
-            <span className="font-mono text-emerald-400">{formatDuration(call.timerSeconds)}</span>
-          </div>
-          <div>
-            <span className="text-xs text-slate-500 uppercase block font-semibold">Outcome</span>
-            <span className="text-slate-200 capitalize">
-              {call.outcome ? call.outcome.replace(/_/g, ' ') : 'N/A'}
-            </span>
-          </div>
-          <div>
-            <span className="text-xs text-slate-500 uppercase block font-semibold">
-              Stage Reached
-            </span>
-            <span className="text-slate-200">Stage {call.currentStage} of 8</span>
-          </div>
-          <div>
-            <span className="text-xs text-slate-500 uppercase block font-semibold">
-              Follow-Up Date
-            </span>
-            <span className="text-slate-200">{call.followUpDate || 'None'}</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-        <h2 className="text-lg font-bold text-white mb-4">Notes & Stage Summary</h2>
-        <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 text-sm text-slate-300 whitespace-pre-wrap">
-          {call.notes || 'No notes recorded for this call.'}
-        </div>
-      </div>
-    </div>
-  );
+  return <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-3"><Link href="/history" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">← Back to History</Link>{call.status === 'in_progress' && <button onClick={resume} className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800">Resume call</button>}</div>
+    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-widest text-blue-700">Call record</p><h1 className="mt-1 text-2xl font-bold text-slate-950">{call.callerName}</h1><p className="mt-1 text-sm text-slate-600">{call.company}{call.callerRole ? ` · ${call.callerRole}` : ''}</p><p className="mt-2 font-mono text-xs text-slate-400">{call.id}</p></div><span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">{statusLabel}</span></div>
+      <div className="mt-6 grid grid-cols-2 gap-4 border-t border-slate-100 pt-5 md:grid-cols-4"><div><p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Duration</p><p className="mt-1 font-mono text-lg text-emerald-700">{duration}</p></div><div><p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Last stage reached</p><p className="mt-1 text-sm font-medium text-slate-900">Stage {call.lastStage}: {stages[call.lastStage - 1]?.title}</p></div><div><p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Outcome</p><p className="mt-1 text-sm font-medium capitalize text-slate-900">{call.outcome?.replace(/_/g, ' ') ?? 'Not set'}</p></div><div><p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Started</p><p className="mt-1 text-sm text-slate-900">{new Date(call.startedAt).toLocaleString()}</p></div></div>
+      {call.doNotCall && <div className="mt-5 rounded-lg border border-rose-200 bg-rose-50 p-4"><p className="font-semibold text-rose-900">Do not call again</p><p className="mt-1 whitespace-pre-wrap text-sm text-rose-800">{call.dncWords || 'Restriction recorded.'}</p></div>}
+      {(call.outcome || call.nextStepType) && <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4"><h2 className="text-sm font-semibold text-slate-900">Final outcome and next step</h2><p className="mt-2 text-sm text-slate-700">{call.outcome?.replace(/_/g, ' ') ?? 'No final outcome'}</p>{call.nextStepType && <p className="mt-1 text-sm text-slate-600">{call.nextStepType}{call.nextStepChannel ? ` · ${call.nextStepChannel}` : ''}{call.followUpDate ? ` · ${call.followUpDate}` : ''}{call.nextStepDetail ? ` · ${call.nextStepDetail}` : ''}</p>}</div>}
+    </section>
+    <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><h2 className="text-xl font-bold text-slate-950">Stage history</h2><p className="mt-1 text-sm text-slate-600">Latest saved revision for each stage. Prospect words, notes, and AI suggestions remain separate.</p><div className="mt-5 space-y-4">{stages.map((stage, index) => { const stageNumber = index + 1; const draft = call.stageData[stageNumber]; return <article key={stage.title} className="rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold text-slate-900">Stage {stageNumber}: {stage.title}</h3><p className="mt-1 text-xs text-slate-500">{draft ? `Revision ${draft.revision ?? 1}${draft.createdAt ? ` · ${new Date(draft.createdAt).toLocaleString()}` : ''}` : 'No saved entry'}</p></div>{draft?.outcomeKey && <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800">{stage.outcomes.find(([key]) => key === draft.outcomeKey)?.[1] ?? draft.outcomeKey}</span>}</div>{draft?.prospectWords && <div className="mt-3 rounded-md bg-slate-50 p-3"><p className="text-xs font-bold uppercase tracking-wider text-slate-500">Their words</p><p className="mt-1 whitespace-pre-wrap font-serif text-sm leading-6 text-slate-800">{draft.prospectWords}</p></div>}{draft?.notes && <div className="mt-3"><p className="text-xs font-bold uppercase tracking-wider text-slate-500">Your note</p><p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-700">{draft.notes}</p></div>}{call.stageHistory.filter((revision) => revision.stage === stageNumber && revision.revision < (draft?.revision ?? 0)).length > 0 && <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3"><summary className="cursor-pointer text-sm font-semibold text-slate-700">Earlier revisions ({call.stageHistory.filter((revision) => revision.stage === stageNumber && revision.revision < (draft?.revision ?? 0)).length})</summary><div className="mt-3 space-y-3">{call.stageHistory.filter((revision) => revision.stage === stageNumber && revision.revision < (draft?.revision ?? 0)).sort((a, b) => b.revision - a.revision).map((revision) => <div key={`${revision.stage}-${revision.revision}`} className="border-t border-slate-200 pt-3"><p className="text-xs font-semibold text-slate-500">Revision {revision.revision}{revision.createdAt ? ` · ${new Date(revision.createdAt).toLocaleString()}` : ''}</p>{revision.outcomeKey && <p className="mt-1 text-sm text-slate-700">Outcome: {revision.outcomeKey.replace(/_/g, ' ')}</p>}{revision.prospectWords && <p className="mt-1 whitespace-pre-wrap font-serif text-sm text-slate-700">{revision.prospectWords}</p>}{revision.notes && <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{revision.notes}</p>}</div>)}</div></details>}</article>; })}</div></section>
+    {call.aiSuggestions.length > 0 && <section className="mt-6 rounded-xl border border-violet-200 bg-violet-50/50 p-5"><h2 className="text-lg font-bold text-slate-950">AI suggestions (separate record)</h2><div className="mt-3 space-y-3">{call.aiSuggestions.map((suggestion) => <div key={suggestion.id} className="rounded-lg border border-violet-100 bg-white p-3"><p className="text-xs font-semibold uppercase tracking-wider text-violet-700">Stage {suggestion.stage} · AI-generated</p><p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-800">{suggestion.suggestion}</p></div>)}</div></section>}
+  </div>;
 }

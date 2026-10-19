@@ -316,7 +316,7 @@ export default function HowItWorksPage() {
             Open the workspace and start a call. The structure will guide you through each stage.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="/workspace" className="btn btn--primary btn--lg">
+            <Link href="/workspace?new=1" className="btn btn--primary btn--lg">
               Start a Call
             </Link>
             <Link href="/help" className="btn btn--secondary btn--lg">
