@@ -51,7 +51,7 @@ const features = [
       },
       {
         title: "Revision History",
-        description: "Every stage edit creates a new revision (call_id, stage, revision). Previous revisions preserved and restorable.",
+        description: "Every stage edit creates a new revision (call_id, stage, revision). Previous revisions are preserved.",
         status: "implemented",
       },
     ],
@@ -101,7 +101,7 @@ const features = [
       },
       {
         title: "History API",
-        description: "GET /api/calls returns paginated list with prospect, company, stage, outcome, status, next step. Ready for history UI.",
+        description: "GET /api/calls returns paginated list with prospect, company, stage, outcome, status, next step. Used by the History page.",
         status: "implemented",
       },
       {

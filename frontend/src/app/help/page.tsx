@@ -170,11 +170,11 @@ const helpSections = [
       },
       {
         heading: "Call history",
-        body: "After closing a call, you see a summary with the outcome, stage reached, and next step. The call ID is stored in your browser so you can resume in-progress calls. (Full history listing is available via the API at GET /api/calls.)",
+        body: "After closing a call, you see a summary with the outcome, stage reached, and next step. The History page lists your past calls, and each one opens a detail view with its stage results. The call ID of an in-progress call is stored in your browser so you can resume it.",
       },
       {
         heading: "Resuming in-progress calls",
-        body: "If you close the tab during a call, your call ID is saved locally. When you return to the workspace, it will offer to restore the call. Click 'Retry loading' if needed.",
+        body: "If you close the tab during a call, your call ID is saved locally. When you return to the workspace, it restores the call automatically. Click 'Retry loading' if it does not.",
       },
       {
         heading: "Data retention",
