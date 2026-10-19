@@ -1,5 +1,6 @@
-// Shared fetch wrapper for the Callframe API. Used by the history pages.
-// (The workspace still has its own copy; it is intentionally not refactored yet.)
+// Shared fetch wrapper for the Callframe API. Used by the workspace and the history pages.
+// When the API answers 401 UNAUTHORIZED it asks for the access code once (through the
+// AccessCodeGate dialog), keeps it in sessionStorage and retries the request.
 
 export const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000").replace(/\/$/, "");
 
@@ -31,6 +32,43 @@ function readAccessCode(): string | null {
   }
 }
 
+function storeAccessCode(code: string) {
+  try {
+    window.sessionStorage.setItem(ACCESS_CODE_STORAGE_KEY, code);
+  } catch {
+    // Storage blocked: the code is asked for again on the next 401.
+  }
+}
+
+function clearAccessCode() {
+  try {
+    window.sessionStorage.removeItem(ACCESS_CODE_STORAGE_KEY);
+  } catch {
+    // Nothing to clear.
+  }
+}
+
+// The gate dialog registers itself here. Without a registered prompt (e.g. server render)
+// a 401 is simply thrown to the caller.
+type AccessCodePrompt = (rejected: boolean) => Promise<string | null>;
+let promptHandler: AccessCodePrompt | null = null;
+let pendingPrompt: Promise<string | null> | null = null;
+
+export function registerAccessCodePrompt(handler: AccessCodePrompt | null) {
+  promptHandler = handler;
+}
+
+// Several requests can hit 401 at once; they all share one dialog.
+function askForAccessCode(rejected: boolean): Promise<string | null> {
+  if (!promptHandler) return Promise.resolve(null);
+  if (!pendingPrompt) {
+    pendingPrompt = promptHandler(rejected).finally(() => {
+      pendingPrompt = null;
+    });
+  }
+  return pendingPrompt;
+}
+
 const NETWORK_MESSAGE = "Could not reach the server. It may be waking up; please retry in a moment.";
 
 type ErrorPayload = { error?: { code?: unknown; message?: unknown; details?: unknown } };
@@ -45,7 +83,7 @@ function toDetails(value: unknown): FieldError[] {
   });
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function requestOnce<T>(path: string, init: RequestInit): Promise<T> {
   const accessCode = readAccessCode();
   const headers = new Headers(init.headers);
   if (init.body !== undefined && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
@@ -86,6 +124,35 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     throw new ApiError(response.status, "BAD_RESPONSE", "The server sent an unreadable answer. Please retry.");
   }
   return payload as T;
+}
+
+function isUnauthorized(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 401 && error.code === "UNAUTHORIZED";
+}
+
+const MAX_CODE_ATTEMPTS = 3;
+
+export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let used = readAccessCode();
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await requestOnce<T>(path, init);
+    } catch (error) {
+      if (!isUnauthorized(error) || attempt >= MAX_CODE_ATTEMPTS) throw error;
+      const current = readAccessCode();
+      if (current !== used) {
+        // Another request supplied a code while this one was in flight: just retry with it.
+        used = current;
+        continue;
+      }
+      // The code we sent (if any) was refused: drop it and ask once.
+      if (current) clearAccessCode();
+      const code = await askForAccessCode(current !== null);
+      if (!code) throw error;
+      storeAccessCode(code);
+      used = code;
+    }
+  }
 }
 
 function isAbort(error: unknown) {

@@ -56,7 +56,7 @@ export default function PrivacyPage() {
             <section>
               <h2 className="heading-3 text-cream-50 mb-4">3. Frontend-Backend Communication</h2>
               <p className="body text-espresso-700 mb-4">
-                The frontend (Next.js on Vercel) communicates with the backend (Express on Render) over HTTPS:
+                The frontend communicates with the backend API:
               </p>
               <ul className="space-y-3 text-espresso-700">
                 <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>API base URL:</strong> Configured via <code className="bg-espresso-100 px-1 rounded font-mono text-sm">NEXT_PUBLIC_API_URL</code> (public, no secrets).</li>
@@ -103,14 +103,14 @@ export default function PrivacyPage() {
                 Implemented measures:
               </p>
               <ul className="space-y-3 text-espresso-700">
-                <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>TLS everywhere:</strong> Frontend (Vercel) and backend (Render) enforce HTTPS. Database connection uses TLS with CA certificate verification.</li>
-                <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Secrets management:</strong> <code className="bg-espresso-100 px-1 rounded font-mono text-sm">DATABASE_URL</code>, <code className="bg-espresso-100 px-1 rounded font-mono text-sm">GEMINI_API_KEY</code>, <code className="bg-espresso-100 px-1 rounded font-mono text-sm">APP_ACCESS_CODE</code> exist only in backend environment variables (Render). Frontend receives only <code className="bg-espresso-100 px-1 rounded font-mono text-sm">NEXT_PUBLIC_API_URL</code>.</li>
+                <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Database TLS:</strong> The backend connects to the database over TLS with CA certificate verification.</li>
+                <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Secrets management:</strong> <code className="bg-espresso-100 px-1 rounded font-mono text-sm">DATABASE_URL</code>, <code className="bg-espresso-100 px-1 rounded font-mono text-sm">GEMINI_API_KEY</code>, <code className="bg-espresso-100 px-1 rounded font-mono text-sm">APP_ACCESS_CODE</code> exist only in backend environment variables. Frontend receives only <code className="bg-espresso-100 px-1 rounded font-mono text-sm">NEXT_PUBLIC_API_URL</code>.</li>
                 <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Least-privilege database role:</strong> API uses a restricted role, not the project owner or service role.</li>
                 <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Row Level Security:</strong> Enabled on all tables; public roles have no access.</li>
                 <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Input validation:</strong> All endpoints validate UUIDs, stage bounds (1–8), outcome keys, text lengths (≤4,000), and JSON size (≤50 KB). Parameterized queries only.</li>
                 <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Rate limiting:</strong> In-memory limit on AI assist endpoint (configured per-client).</li>
-                <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Logging:</strong> Server logs contain method, path, status, and call IDs — never prospect words, notes, or API keys.</li>
-                <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Optional access code:</strong> If <code className="bg-espresso-100 px-1 rounded font-mono text-sm">APP_ACCESS_CODE</code> is set, all API requests require it via header.</li>
+                <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Logging:</strong> Error logs record only an error name and code, never prospect words, notes, or API keys.</li>
+                <li className="body flex items-start gap-2"><span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-ochre-500 mt-1.5" /><strong>Optional access code:</strong> If <code className="bg-espresso-100 px-1 rounded font-mono text-sm">APP_ACCESS_CODE</code> is set, every /api request must send it in the x-access-code header. The workspace asks for it once per browser session when the server requires it.</li>
               </ul>
               <p className="mt-3 body-sm text-espresso-500">
                 The Service does not currently implement: end-to-end encryption, automated penetration testing, SOC 2 compliance, or a bug bounty program.

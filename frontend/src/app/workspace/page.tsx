@@ -3,162 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import examplesData from "@/data/examples.json";
+import { ApiError, apiFetch, apiUrl } from "@/lib/api";
+import { finalOutcomes, stages, type OutcomeKey } from "@/lib/stages";
 
-const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000").replace(
-  /\/$/,
-  "",
-);
 const activeCallStorageKey = "callframe.activeCallId";
 
 const transcriptExamples = examplesData.examples;
 
-const stages = [
-  {
-    title: "Opening",
-    guidance:
-      "Reach the right person, introduce yourself, and listen for contact or availability issues.",
-    prompts: [
-      "Introduce yourself and your organisation.",
-      "Check that you have reached the intended person.",
-      "Listen for a transfer, an unavailable contact, or a wrong number.",
-    ],
-    outcomes: [
-      ["reached_prospect", "Reached the right person"],
-      ["via_assistant", "Assistant or switchboard"],
-      ["not_available", "Not available now"],
-      ["wrong_or_left", "Wrong number or left the company"],
-      ["line_or_language", "Bad line or language barrier"],
-    ],
-  },
-  {
-    title: "Purpose",
-    guidance:
-      "Explain why you are calling in one or two clear sentences, then listen for questions or concerns.",
-    prompts: [
-      "State the reason for the call simply.",
-      "Avoid claims you cannot support.",
-      "Listen for questions about the purpose or how you made contact.",
-    ],
-    outcomes: [
-      ["purpose_heard", "Heard the purpose"],
-      ["asked_what_we_do", "Asked what we do"],
-      ["asked_number_source", "Asked where we got the number"],
-      ["called_it_sales", "Said it sounds like a sales call"],
-    ],
-  },
-  {
-    title: "Permission",
-    guidance:
-      "Capture a clear yes, no, or callback request; silence and an unanswered question are not permission.",
-    prompts: [
-      "Ask if they are willing and available to continue.",
-      "Listen for an explicit yes or no.",
-      "If they ask for another time, record the callback request.",
-    ],
-    outcomes: [
-      ["yes_now", "Agreed to talk now"],
-      ["asked_callback", "Asked for a callback"],
-      ["send_first", "Wants it sent first"],
-      ["no_clear_answer", "Did not answer clearly"],
-      ["declined_to_talk", "Declined to talk"],
-    ],
-  },
-  {
-    title: "Their business",
-    guidance:
-      "Understand the prospect's company and work before pitching; listen for their own description and corrections.",
-    prompts: [
-      "Invite them to describe their company or work.",
-      "Listen for the terms they use and what they emphasise.",
-      "Check your understanding rather than filling in gaps.",
-    ],
-    outcomes: [
-      ["shared_business", "Described their business"],
-      ["one_line_waiting", "One line, then waited"],
-      ["corrected_us", "Corrected what we assumed"],
-      ["asked_us_first", "Asked about us first"],
-    ],
-  },
-  {
-    title: "Their need, in their words",
-    guidance:
-      "Capture the prospect's statement exactly; keep your interpretation and notes in the separate field.",
-    prompts: [
-      "Listen for the goal, concern, or current priority they actually name.",
-      "Do not paraphrase in the prospect-words field.",
-      "If they do not identify a need, record that without inference.",
-    ],
-    outcomes: [
-      ["named_goal", "Named a goal or problem"],
-      ["says_fine", "Says all is fine"],
-      ["asked_what_we_offer", "Asked what we can do for them"],
-      ["unclear", "Unclear or no answer"],
-    ],
-  },
-  {
-    title: "Objection",
-    guidance:
-      "Record the reason for hesitation or refusal and respect the prospect's boundary.",
-    prompts: [
-      "Listen for the specific concern before responding.",
-      "Acknowledge a refusal without pressure.",
-      "A do-not-call request is a restriction, not a sales outcome.",
-    ],
-    outcomes: [
-      ["has_provider", "Already has a team or consultant"],
-      ["not_right_person", "Not the right person"],
-      ["not_relevant", "Not relevant or no need"],
-      ["wants_writing", "Wants it in writing"],
-      ["declined", "Said no"],
-      ["asked_not_to_call", "⚠ Asked not to be called again"],
-    ],
-  },
-  {
-    title: "Next step",
-    guidance:
-      "Record one concrete action the prospect agreed to, including a time or channel where relevant.",
-    prompts: [
-      "Confirm what the prospect explicitly agreed to.",
-      "Capture a specific time, channel, or person where applicable.",
-      "If nothing was agreed, record that rather than implying a commitment.",
-    ],
-    outcomes: [
-      ["doc_agreed", "Agreed to receive a document"],
-      ["time_named", "Named a time to talk"],
-      ["meeting_agreed", "Agreed to a meeting"],
-      ["referred", "Referred us to someone"],
-      ["nothing_agreed", "Nothing agreed"],
-    ],
-  },
-  {
-    title: "Close",
-    guidance:
-      "End respectfully and ensure the outcome and next step match what was actually said.",
-    prompts: [
-      "Confirm the agreed action, if there is one.",
-      "Keep a callback, document request, or referral distinct from a success.",
-      "The Stage 5 words below remain the prospect's exact statement.",
-    ],
-    outcomes: [
-      ["closed_with_agreement", "Closed with something agreed"],
-      ["closed_after_no", "Closed after a no"],
-      ["line_dropped", "Line dropped or they hung up"],
-    ],
-  },
-] as const;
-
-const finalOutcomes = [
-  { key: "next_step_set", label: "Call or meeting agreed", className: "success" },
-  { key: "document_requested", label: "Document requested", className: "partial" },
-  { key: "callback_requested", label: "Callback requested", className: "partial" },
-  { key: "referred", label: "Referred to someone", className: "partial" },
-  { key: "declined", label: "Declined", className: "negative" },
-  { key: "wrong_contact", label: "Wrong contact or person left", className: "negative" },
-  { key: "no_contact", label: "No proper contact", className: "negative" },
-  { key: "do_not_call", label: "Do not call again", className: "restricted" },
-] as const;
-
-type OutcomeKey = (typeof finalOutcomes)[number]["key"];
 type StageDraft = {
   outcome: string | null;
   words: string;
@@ -192,32 +43,18 @@ type StageResult = {
 };
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
 type NextStep = { type: string; channel: string; when: string; detail: string };
-type ApiError = Error & { status?: number; details?: { field: string; message: string }[] };
 
 const emptyDraft = (): StageDraft => ({ outcome: null, words: "", notes: "" });
 const emptyNextStep = (): NextStep => ({ type: "", channel: "", when: "", detail: "" });
 
-async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiUrl}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
-  const payload = (await response.json().catch(() => null)) as
-    | { error?: { message?: string; details?: { field: string; message: string }[] } }
-    | T
-    | null;
-  if (!response.ok) {
-    const error = new Error(
-      (payload as { error?: { message?: string } } | null)?.error?.message ??
-        "The request could not be completed. Please retry.",
-    ) as ApiError;
-    error.status = response.status;
-    error.details = (payload as { error?: { details?: { field: string; message: string }[] } } | null)
-      ?.error?.details;
-    throw error;
-  }
-  return payload as T;
-}
+// Shown inline (no server round trip) when "Do not call" is chosen without the Stage 6
+// button and the prospect's exact words.
+const DNC_STAGE6_MESSAGE =
+  "Do not call can only be recorded from Stage 6. Go to Stage 6, tap \u201cAsked not to be called again\u201d, and write down their exact words.";
+
+// All workspace calls go through the shared wrapper so a 401 asks for the access code
+// (see AccessCodeGate) and retries with the x-access-code header.
+const apiRequest = apiFetch;
 
 function suggestedOutcome(drafts: StageDraft[]) {
   const key = (stage: number) => drafts[stage - 1]?.outcome;
@@ -279,6 +116,8 @@ function Workspace() {
   );
   const [loading, setLoading] = useState(false);
   const [startError, setStartError] = useState("");
+  // Set when the server refuses to start a call because the prospect asked not to be called.
+  const [startDncCallId, setStartDncCallId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState("");
   const [saveError, setSaveError] = useState("");
   const [closeOpen, setCloseOpen] = useState(false);
@@ -492,6 +331,7 @@ function Workspace() {
       return;
     }
     setStartError("");
+    setStartDncCallId(null);
     setLoading(true);
     try {
       const result = await apiRequest<{ call: CallRecord }>("/api/calls", {
@@ -511,11 +351,17 @@ function Workspace() {
       setCurrentStage(0);
       setActiveCall(result.call);
     } catch (error) {
-      setStartError(
-        error instanceof Error
-          ? error.message
-          : "The call could not be started. Your details remain in the form; retry when the service is available.",
-      );
+      if (error instanceof ApiError && error.status === 409 && error.code === "DNC_RESTRICTED") {
+        // Show the server's own message; link to the earlier call when the server names it.
+        setStartError(error.message);
+        setStartDncCallId(error.details.find((detail) => detail.field === "call_id")?.message ?? null);
+      } else {
+        setStartError(
+          error instanceof Error
+            ? error.message
+            : "The call could not be started. Your details remain in the form; retry when the service is available.",
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -568,6 +414,13 @@ function Workspace() {
   const saveAndClose = async () => {
     if (!call || !closeOutcome) {
       setCloseError("Choose the outcome that best matches what happened.");
+      return;
+    }
+    if (
+      closeOutcome === "do_not_call" &&
+      (draftsRef.current[5].outcome !== "asked_not_to_call" || !draftsRef.current[5].words.trim())
+    ) {
+      setCloseError(DNC_STAGE6_MESSAGE);
       return;
     }
     setClosing(true);
@@ -678,6 +531,7 @@ function Workspace() {
     setCloseOutcome("");
     setNextStep(emptyNextStep());
     setStartError("");
+    setStartDncCallId(null);
     setSaveError("");
   };
 
@@ -693,6 +547,9 @@ function Workspace() {
         drafts.some((draft) => draft.outcome === "asked_not_to_call")),
   );
   const suggestion = suggestedOutcome(drafts);
+  const dncBlocked =
+    closeOutcome === "do_not_call" &&
+    (drafts[5].outcome !== "asked_not_to_call" || !drafts[5].words.trim());
 
   const closePanel = (
     <div className="p-6 md:p-8 space-y-6">
@@ -723,15 +580,11 @@ function Workspace() {
         <legend className="heading-4 text-espresso-100 mb-4">Final outcome</legend>
         <div className="grid gap-3 sm:grid-cols-2">
           {finalOutcomes.map((outcome) => {
-            const disabledDnc =
-              outcome.key === "do_not_call" &&
-              drafts[5].outcome !== "asked_not_to_call";
             const selected = closeOutcome === outcome.key;
             return (
               <button
                 key={outcome.key}
                 aria-pressed={selected}
-                disabled={disabledDnc}
                 onClick={() => {
                   setCloseOutcome(outcome.key);
                   setNextStep(emptyNextStep());
@@ -744,7 +597,7 @@ function Workspace() {
                     : selected
                     ? "border-2 border-ochre-500 bg-ochre-50 text-espresso-100"
                     : "border-2 border-espresso-200 hover:border-ochre-300 hover:bg-cream-50 text-espresso-100"
-                } ${selected && outcome.className === "restricted" ? "ring-2 ring-red-400" : ""} ${disabledDnc ? "opacity-50 cursor-not-allowed" : ""}`}
+                } ${selected && outcome.className === "restricted" ? "ring-2 ring-red-400" : ""}`}
               >
                 <div className="flex items-center justify-between">
                   <span className="font-medium">{outcome.label}</span>
@@ -761,7 +614,7 @@ function Workspace() {
         </div>
         {drafts[5].outcome !== "asked_not_to_call" && (
           <p className="mt-3 caption text-espresso-500">
-            Do not call is available only after recording that explicit request at Stage 6.
+            Do not call needs the explicit request recorded at Stage 6: the button and their exact words.
           </p>
         )}
       </fieldset>
@@ -868,7 +721,12 @@ function Workspace() {
           <p className="whitespace-pre-wrap font-display leading-7 text-red-900 bg-white p-4 rounded-lg border border-red-200 mb-4">
             {drafts[5].words || "No exact words recorded yet."}
           </p>
-          {!drafts[5].words.trim() && (
+          {dncBlocked && (
+            <p className="mb-4 rounded-lg bg-white p-3 text-sm font-medium text-red-800" role="alert">
+              {DNC_STAGE6_MESSAGE}
+            </p>
+          )}
+          {dncBlocked && (
             <button
               className="btn btn--secondary btn--sm border-red-400 text-red-700 hover:bg-red-50"
               onClick={() => {
@@ -877,7 +735,7 @@ function Workspace() {
               }}
               type="button"
             >
-              Return to Stage 6 and record their words
+              Go to Stage 6
             </button>
           )}
         </section>
@@ -918,7 +776,7 @@ function Workspace() {
         </button>
         <button
           className="btn btn--primary flex-1 sm:flex-none"
-          disabled={closing || !closeOutcome || (closeOutcome === "do_not_call" && !drafts[5].words.trim())}
+          disabled={closing || !closeOutcome || dncBlocked}
           onClick={() => void saveAndClose()}
           type="button"
         >
@@ -957,7 +815,7 @@ function Workspace() {
             {transcriptExamples.find((ex) => ex.stage === currentStage + 1)?.quotes.map((quote) => (
               <li key={quote.callId} className="rounded-lg bg-cream-100 p-4">
                 <p className="font-display italic text-espresso-100 mb-1">&ldquo;{quote.text}&rdquo;</p>
-                <p className="caption text-espresso-500">{quote.callId} · {quote.speaker} · logged: {quote.loggedOutcome}</p>
+                <p className="caption text-espresso-500">{quote.callId} · {quote.speaker} · logged in dataset: {quote.datasetLogged}</p>
               </li>
             ))}
           </ul>
@@ -1229,9 +1087,19 @@ function Workspace() {
               />
             </div>
             {startError && (
-              <p className="rounded-lg bg-red-50 p-3 text-sm leading-6 text-red-800" role="alert">
-                {startError}
-              </p>
+              <div className="rounded-lg bg-red-50 p-3 text-sm leading-6 text-red-800" role="alert">
+                <p>{startError}</p>
+                {startDncCallId && (
+                  <p className="mt-2">
+                    <Link
+                      className="font-medium underline"
+                      href={`/history/${encodeURIComponent(startDncCallId)}`}
+                    >
+                      View the earlier call
+                    </Link>
+                  </p>
+                )}
+              </div>
             )}
             <button
               className="btn btn--primary btn--lg w-full"
