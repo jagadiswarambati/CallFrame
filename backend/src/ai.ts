@@ -8,7 +8,7 @@ import { DNC_OUTCOME_KEY, isBlockedByDnc, latestByStage } from "./rules";
 export { DNC_OUTCOME_KEY, isBlockedByDnc, latestByStage };
 
 export const MAX_WORDS = 40;
-export const AI_TIMEOUT_MS = 9_000;
+export const AI_TIMEOUT_MS = 30_000;
 export const RATE_LIMIT_MAX = 10;
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 export const BLOCKED_MESSAGE = "They asked not to be called. End the call politely.";

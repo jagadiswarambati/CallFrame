@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { MUTATING_TIMEOUT_MS } from "@/lib/api";
+import { MUTATING_TIMEOUT_MS, ASSIST_TIMEOUT_MS } from "@/lib/api";
 import { activeCallStorageKey } from "@/app/workspace/page";
 
 // ─── helpers that mirror workspace logic ─────────────────────────────────────
@@ -215,6 +215,49 @@ describe("api MUTATING_TIMEOUT_MS", () => {
   it("is a positive number ≥ 5s and ≤ 30s", () => {
     expect(MUTATING_TIMEOUT_MS).toBeGreaterThanOrEqual(5_000);
     expect(MUTATING_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
+  });
+});
+
+describe("api ASSIST_TIMEOUT_MS", () => {
+  it("is set to 35s-40s and exceeds MUTATING_TIMEOUT_MS", () => {
+    expect(ASSIST_TIMEOUT_MS).toBeGreaterThanOrEqual(35_000);
+    expect(ASSIST_TIMEOUT_MS).toBeLessThanOrEqual(40_000);
+    expect(ASSIST_TIMEOUT_MS).toBeGreaterThan(MUTATING_TIMEOUT_MS);
+  });
+});
+
+describe("suggest what to say timeout / error handling", () => {
+  it("isSuggesting is always reset to false after a timeout or error, allowing retry", async () => {
+    let isSuggesting = false;
+    let showSuggestionError = "";
+    let aiSuggestion = "";
+
+    const handleSuggestMock = async (shouldFail: boolean) => {
+      isSuggesting = true;
+      showSuggestionError = "";
+      try {
+        if (shouldFail) {
+          throw new Error("The request timed out. Check your connection and retry.");
+        }
+        aiSuggestion = "Good morning, Meridian offers a free growth report.";
+      } catch (err: unknown) {
+        showSuggestionError = err instanceof Error ? err.message : "Could not fetch a suggestion.";
+      } finally {
+        isSuggesting = false;
+      }
+    };
+
+    // First attempt times out
+    await handleSuggestMock(true);
+    expect(isSuggesting).toBe(false);
+    expect(showSuggestionError).toBe("The request timed out. Check your connection and retry.");
+    expect(aiSuggestion).toBe("");
+
+    // User can retry
+    await handleSuggestMock(false);
+    expect(isSuggesting).toBe(false);
+    expect(showSuggestionError).toBe("");
+    expect(aiSuggestion).toBe("Good morning, Meridian offers a free growth report.");
   });
 });
 

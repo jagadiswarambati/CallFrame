@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  AI_TIMEOUT_MS,
   BLOCKED_MESSAGE,
   SYSTEM_PROMPT,
   buildUserPrompt,
@@ -202,6 +203,9 @@ describe("generateSuggestion (fake fetch)", () => {
     }).then(() => "no-error", (e: { failure: { code: string } }) => e.failure.code);
     assert.equal(result, "AI_UNAVAILABLE");
     assert.ok(Date.now() - started < 2000);
+  });
+  it("default AI_TIMEOUT_MS is 30,000 ms", () => {
+    assert.equal(AI_TIMEOUT_MS, 30_000);
   });
 });
 

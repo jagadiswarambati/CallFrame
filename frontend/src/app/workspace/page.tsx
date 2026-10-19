@@ -346,10 +346,11 @@ export default function WorkspacePage() {
     setShowSuggestionError('');
     try {
       await persistStage(currentStage);
-      const { apiFetch } = await import('@/lib/api');
+      const { apiFetch, ASSIST_TIMEOUT_MS } = await import('@/lib/api');
       const response = await apiFetch<{ suggestion?: string | { text?: string }; result?: { suggestion?: string | { text?: string } } }>(`/api/calls/${encodeURIComponent(activeCall.id)}/assist`, {
         method: 'POST',
         body: JSON.stringify({ stage: currentStage }),
+        signal: AbortSignal.timeout(ASSIST_TIMEOUT_MS),
       });
       const suggestionPayload = response.suggestion ?? response.result?.suggestion;
       const suggestionText = typeof suggestionPayload === 'string' ? suggestionPayload : suggestionPayload?.text;
@@ -474,7 +475,19 @@ export default function WorkspacePage() {
 
             <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-semibold text-slate-900">AI speaking suggestion</h3><p className="mt-1 text-xs text-slate-500">Suggestions are kept separate from prospect words and your notes.</p></div><button type="button" onClick={handleSuggest} disabled={isSuggesting || hasSavedDncSignal} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50">{isSuggesting ? 'Generating…' : 'Suggest what to say'}</button></div>
-              {showSuggestionError && <p role="alert" className="mt-3 text-sm text-red-700">{showSuggestionError}</p>}
+              {showSuggestionError && (
+                <div className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  <p role="alert">{showSuggestionError}</p>
+                  <button
+                    type="button"
+                    onClick={handleSuggest}
+                    disabled={isSuggesting || hasSavedDncSignal}
+                    className="shrink-0 font-semibold underline hover:text-red-950"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
               {aiSuggestion && <div className="mt-3 rounded-lg border border-violet-200 bg-white p-3 text-sm leading-6 text-slate-800"><p className="mb-1 text-xs font-bold uppercase tracking-wider text-violet-700">AI suggestion · not prospect words</p>{aiSuggestion}</div>}
             </div>
 

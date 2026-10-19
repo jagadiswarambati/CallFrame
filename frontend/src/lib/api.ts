@@ -4,9 +4,8 @@
 
 export const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000").replace(/\/$/, "");
 
-// Requests use a finite timeout so loading screens cannot spin indefinitely when the API hangs.
-// A supplied AbortSignal (for example, from a React effect cleanup) is respected.
 export const MUTATING_TIMEOUT_MS = 12_000;
+export const ASSIST_TIMEOUT_MS = 35_000;
 
 export const ACCESS_CODE_STORAGE_KEY = "callframe.accessCode";
 
@@ -98,8 +97,12 @@ async function requestOnce<T>(path: string, init: RequestInit): Promise<T> {
 
   // Every request gets a hard timeout unless the caller supplies its own AbortSignal.
   // This also prevents History/detail loading states from waiting forever on a stuck GET.
+  // Assist requests get ASSIST_TIMEOUT_MS (35s) to allow Gemini generation sufficient time.
   let signal = init.signal ?? undefined;
-  if (!signal) signal = AbortSignal.timeout(MUTATING_TIMEOUT_MS);
+  if (!signal) {
+    const isAssist = path.includes("/assist");
+    signal = AbortSignal.timeout(isAssist ? ASSIST_TIMEOUT_MS : MUTATING_TIMEOUT_MS);
+  }
 
   const request: RequestInit = { ...init, headers, signal };
 
