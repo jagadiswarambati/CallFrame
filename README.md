@@ -1,343 +1,311 @@
 # Callframe
 
-## Purpose
+**A cold-call companion that helps a caller follow a structured conversation, capture what the prospect actually says, record a truthful outcome, and review past calls.**
 
-Callframe is a cold-call companion. While a sales call is happening, the caller works
-through eight stages (Opening, Purpose, Permission, Their business, Their need in their
-words, Objection, Next step, Close), taps what actually happened, and writes down the
-prospect's own words. When the call ends, Callframe records an honest outcome and keeps a
-history of every call, including every earlier version of what was recorded at each stage.
+> Built for the DeepThought CultureTech Forward Deployed Engineer selection task. This repository is intended to be public. Do not add the private task transcripts, real call recordings, credentials, or personal prospect data.
 
-It was built for the DeepThought Forward Deployed Engineer selection task. The product
-spec is [`prd.md`](prd.md).
+## Live links
 
-What it deliberately does:
+Replace these placeholders after deployment. Do not submit the README with placeholder URLs.
 
-- keeps the **prospect's exact words** in their own field, separate from the caller's notes
-  and from anything the AI wrote;
-- never counts a **document request, callback or referral as a success**;
-- treats **do not call** as a restriction on the prospect, set only by one explicit button;
-- offers **one** optional AI feature ("Suggest what to say") that can never change saved data.
+| Resource | URL |
+| --- | --- |
+| Live application (Vercel) | **TODO: add Vercel URL** |
+| Backend API (Render) | **TODO: add Render base URL** |
+| Backend health check | **TODO: add `https://<render-service>/health`** |
+| Public source repository | https://github.com/jagadiswarambati/CallFrame |
+| Six-minute walkthrough video (Google Drive) | **TODO: add viewable Drive link** |
 
-No transcript material is stored in this repository and none must be added.
+## What it does
 
-## Architecture
+Callframe is a browser-based companion for a caller speaking to a prospect on the phone. It does not dial or place phone calls. The caller moves through eight stages:
+
+1. Opening
+2. Purpose
+3. Permission
+4. Their business
+5. Their need, in their words
+6. Objection
+7. Next step
+8. Close
+
+At each stage the caller records what happened, the prospect's exact words, and caller notes in separate fields. Calls are saved in the database, and History provides persisted call records, stage details, and revisions.
+
+### Product rules
+
+- Prospect words, caller notes, and AI-generated text are kept separate.
+- A document request, callback, or referral is not counted as a successful outcome.
+- **Do not call** is a restriction, not a generic refusal. It requires the explicit Stage 6 action and the prospect's exact words.
+- The optional AI feature suggests one line the caller could say next. It does not edit saved call data and must be blocked when a do-not-call signal applies.
+- Calls ended before reaching Stage 8 are recorded as `ended_early`; calls that reach Stage 8 can be `completed`.
+- Earlier stage revisions are retained when changed.
+
+## Technology
+
+| Layer | Technology | Hosting target |
+| --- | --- | --- |
+| Frontend | Next.js App Router, React, TypeScript, Tailwind CSS | Vercel |
+| Backend | Node.js, Express, TypeScript | Render |
+| Database | Supabase PostgreSQL | Supabase |
+| AI assistance | Google Gemini API, called only by the backend | Gemini API |
+| Tests | Vitest / Testing Library for frontend; Node test runner through `tsx` for backend | GitHub Actions CI |
+
+**LLM use:** Google Gemini is used only for the optional **Suggest what to say** feature. The backend reads the saved call and stage context, asks Gemini for a short suggested line (maximum 40 words), and stores the suggestion separately. Configure the model with `GEMINI_MODEL` in the backend environment. The model name must be a currently available model ID for the configured API key; verify the deployed value before the walkthrough.
+
+## Repository layout
 
 ```text
-Browser
-  |  HTTPS
-  v
-Frontend  (frontend/, Next.js + TypeScript + Tailwind, hosted on Vercel)
-  |  HTTPS, JSON, optional x-access-code header     (only NEXT_PUBLIC_API_URL is public)
-  v
-Backend   (backend/, Node + Express + TypeScript, hosted on Render)
-  |-- src/index.ts   HTTP routes, validation, transactions, CORS, access code
-  |-- src/rules.ts   pure business rules (outcomes, do-not-call, status, revisions)
-  |-- src/ai.ts      "Suggest what to say": prompt, Gemini call, limits, rate limit
-  |
-  |-- TLS (verified with the Supabase CA) --> Supabase PostgreSQL (database/schema.sql)
-  |-- HTTPS (API key sent by the backend only) --> Gemini API
+.
+├── .github/workflows/    # CI and repository maintenance workflows
+├── backend/              # Express API, validation, rules, Gemini integration
+│   ├── certs/            # Supabase TLS CA certificate
+│   ├── scripts/          # Database test and API smoke test
+│   └── src/
+├── database/schema.sql   # PostgreSQL tables, role, grants and RLS policies
+├── docs/
+│   ├── architecture.md
+│   └── TEST_PLAN.md
+├── frontend/             # Next.js user interface
+├── scripts/              # Local transcript-quote verification utility
+└── prd.md                # Product requirements for the task
 ```
 
-```text
-frontend/    Next.js app (Vercel root directory)
-backend/     Express API (Render root directory)
-database/    schema.sql for Supabase PostgreSQL
-docs/        architecture.md and TEST_PLAN.md
-scripts/     verify-quotes.mjs (checks the examples against local transcripts)
-```
+## Run locally
 
-More detail: [`docs/architecture.md`](docs/architecture.md).
+### Requirements
 
-## Local setup
+- Node.js 20 or later
+- npm
+- A Supabase project and PostgreSQL pooler connection
+- A Gemini API key and a supported model ID for the optional AI feature
 
-Requirements: Node.js 20 or later, npm, a Supabase project (see
-[Database setup](#database-setup)) and, for the AI feature, a Gemini API key.
+### 1. Configure the database
 
-Backend (first terminal):
-
-```powershell
-cd backend
-npm install
-Copy-Item .env.example .env
-# Edit .env: set DATABASE_URL, FRONTEND_ORIGIN, GEMINI_API_KEY, GEMINI_MODEL
-npm run dev
-```
-
-Frontend (second terminal):
-
-```powershell
-cd frontend
-npm install
-Copy-Item .env.example .env.local
-# NEXT_PUBLIC_API_URL defaults to http://localhost:4000
-npm run dev
-```
-
-Open <http://localhost:3000>. Check the API at <http://localhost:4000/health>: `200` with
-`"db": "up"` means the database is reachable, `503` means it is not configured or not
-reachable.
-
-`.env` and `.env.local` are git-ignored. Never commit real values.
-
-## Environment variables
-
-Backend (set in `backend/.env` locally, in the Render environment in production):
-
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | yes | Supabase **pooler** connection string for the `callframe_api` role. Do not add `?sslmode=...` (see Database setup). Secret. |
-| `DATABASE_SSL_CA_PATH` | optional | Path to the Supabase CA certificate, relative paths resolve from `backend/`. Default `certs/supabase-ca.crt`. **Currently read only by `scripts/test_db.js`; the API itself loads `backend/certs/supabase-ca.crt`** (see Known limitations). |
-| `FRONTEND_ORIGIN` | yes | Exact browser origin allowed by CORS, for example `https://your-app.vercel.app` (no trailing slash). Comma-separate several. Default `http://localhost:3000`. |
-| `GEMINI_API_KEY` | for AI | Gemini API key. Backend only. Secret. |
-| `GEMINI_MODEL` | for AI | Gemini model id from Google AI Studio. **No default; it must be set.** Without it, or without the key, the AI button answers `503 AI_NOT_CONFIGURED` and the rest of the app works. |
-| `APP_ACCESS_CODE` | optional | When set, every `/api` request must send it as the `x-access-code` header. Blank = open API. `/health` is always open. Secret. |
-| `PORT` | optional | Port to listen on. Default `4000`. Render sets it for you. |
-| `DATABASE_SSL` | local only | Set to `false` only for a local database without TLS. Leave unset everywhere else. |
-
-Frontend (set in `frontend/.env.local` locally, in Vercel project settings in production):
-
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `NEXT_PUBLIC_API_URL` | yes | Base URL of the API, no trailing slash. Public, so never put a secret in it. Baked in at build time: change it, then redeploy. |
-
-Secrets (`DATABASE_URL`, `GEMINI_API_KEY`, `APP_ACCESS_CODE`) exist only in backend
-environment variables.
-
-## Database setup
-
-1. In Supabase, create a project.
-2. Open [`database/schema.sql`](database/schema.sql). **Change the role password:**
-   replace `CHANGE_ME_BEFORE_RUNNING` in the `create role` block with a long random
-   password of your own. The script refuses to run while the placeholder is unchanged.
-   Do not commit the edited file.
-3. In **SQL Editor > New query**, paste the file and run it once. It creates the three
-   tables, enables row level security, creates the `callframe_api` role and grants it only
-   what the API needs (`stage_results` and `ai_suggestions` are insert-only; no deletes).
-4. Build the **pooler** connection string for the new role. Copy the pooler host from your
-   project's connection settings in the Supabase dashboard. The user name is
-   `callframe_api.<project-ref>`, the password is the one from step 2:
+1. Create a Supabase project.
+2. Open `database/schema.sql` and replace `CHANGE_ME_BEFORE_RUNNING` in the `callframe_api` role block with a long, unique password. **Do not commit the edited SQL or password.**
+3. Run the SQL in **Supabase Dashboard → SQL Editor** on a fresh project. It creates the application tables, least-privilege API role, grants, and row-level security policies.
+4. Obtain the PostgreSQL **pooler** connection details from Supabase. Use the `callframe_api.<project-ref>` role and port `6543`, following this shape:
 
    ```text
    postgresql://callframe_api.<project-ref>:<role-password>@<pooler-host>:6543/postgres
    ```
 
-   Put it in `DATABASE_URL`. Do **not** add `?sslmode=...`: the `pg` driver lets a
-   `sslmode` in the URL override the explicit CA setting, which `scripts/test_db.js`
-   works around and `src/index.ts` does not.
-5. Download the CA certificate from **Supabase Dashboard > Database > Settings > SSL**
-   and save it as `backend/certs/supabase-ca.crt`.
-   The repository already contains the public "Supabase Root 2021 CA" at that path; replace
-   it only if your project needs a different one. TLS verification stays on; there is no
-   option to turn it off.
-6. Check the connection:
+   URL-encode special characters in the password as required. Do not add an `sslmode` query parameter; the backend configures TLS with the certificate.
+5. Ensure `backend/certs/supabase-ca.crt` contains the appropriate Supabase CA certificate. TLS verification must remain enabled.
 
-   ```powershell
-   cd backend
-   node scripts/test_db.js
-   ```
+If the role already exists, the SQL's `CREATE ROLE` block will not rotate its password. Manage an existing role's password deliberately in Supabase rather than assuming rerunning the script changes it.
 
-   Expected: `SUCCESS: connected with verified TLS, SELECT 1 returned 1`.
+### 2. Configure and start the backend
 
-## API endpoints
-
-Base URL: `http://localhost:4000` locally. Errors always look like
-`{ "error": { "code": "...", "message": "...", "details": [{ "field": "...", "message": "..." }] } }`.
-When `APP_ACCESS_CODE` is set, every `/api` request needs an `x-access-code` header (in the
-PowerShell examples below, add `"x-access-code" = "<code>"` to `$json`).
-
-| Method and path | Purpose |
-| --- | --- |
-| `GET /health` | Database check. `200` ok, `503` degraded. Open (no access code). |
-| `GET /api/calls?limit=50&offset=0` | Newest-first call list (limit 1 to 100) with `display_status` and `total`. |
-| `POST /api/calls` | Start a call. `409 DNC_RESTRICTED` if the same name and company asked not to be called. |
-| `GET /api/calls/:id` | One call with every stage revision, the latest revision per stage and the AI suggestions. |
-| `PUT /api/calls/:id/stages/:stage` | Save a stage (1 to 8). Identical to the latest revision = no change; otherwise a new revision. `409 CALL_CLOSED` once closed. |
-| `PATCH /api/calls/:id/progress` | Record the highest stage reached. |
-| `POST /api/calls/:id/close` | Close with an outcome. Validates the next step. |
-| `POST /api/calls/:id/assist` | "Suggest what to say" for one stage. |
-
-Examples (PowerShell; use `curl.exe` if you prefer curl, because `curl` is an alias in
-Windows PowerShell):
-
-```powershell
-$api = "http://localhost:4000"
-$json = @{ "Content-Type" = "application/json" }
-
-# Health
-Invoke-RestMethod "$api/health"
-
-# Start a call
-$call = (Invoke-RestMethod -Method Post "$api/api/calls" -Headers $json `
-  -Body (@{ prospect_name = "Test Person"; company = "Example Co"; prospect_role = "Owner" } | ConvertTo-Json)).call
-
-# Save stage 5 (their need, in their words)
-Invoke-RestMethod -Method Put "$api/api/calls/$($call.id)/stages/5" -Headers $json `
-  -Body (@{ outcome_key = "named_goal"; prospect_words = "We want fewer manual reports."; notes = "" } | ConvertTo-Json)
-
-# Close with a call agreed
-Invoke-RestMethod -Method Post "$api/api/calls/$($call.id)/close" -Headers $json `
-  -Body (@{ outcome = "next_step_set"; ended_stage = 7; next_step = @{ type = "call"; when = "Thursday 10:00" } } | ConvertTo-Json -Depth 4)
-
-# Ask for a suggestion (needs GEMINI_API_KEY and GEMINI_MODEL on the backend)
-Invoke-RestMethod -Method Post "$api/api/calls/$($call.id)/assist" -Headers $json -Body '{"stage":5}'
-```
-
-Close rules (`outcome`, plus `ended_stage` 1 to 8):
-
-| `outcome` | Required `next_step` |
-| --- | --- |
-| `next_step_set` | `type` = `call` or `meeting`, and `when` |
-| `document_requested` | `type` = `document`, and `channel` |
-| `callback_requested` | `type` = `call`, and `when` |
-| `referred` | `type` = `referral`, and `detail` |
-| `declined`, `wrong_contact`, `no_contact` | none allowed |
-| `do_not_call` | none allowed, and the latest Stage 6 revision must hold the `asked_not_to_call` button and the prospect's exact words |
-
-`assist` answers `200 { suggestion }`, `200 { blocked: true }` for a do-not-call call, or an
-error: `404`, `422 NOTHING_TO_ASSIST`, `429 RATE_LIMITED` or `AI_QUOTA`, `502 AI_CONFIG`,
-`503 AI_NOT_CONFIGURED` or `AI_UNAVAILABLE`.
-
-## Deployment
-
-Deploy the backend first, because the frontend needs its URL.
-
-### Render (backend)
-
-1. New > Web Service, connect the repository.
-2. Root directory: `backend`.
-3. Build command: `npm install && npm run build`. Start command: `npm start`.
-4. Health check path: `/health`.
-5. Environment: `DATABASE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, optionally
-   `APP_ACCESS_CODE`, and `FRONTEND_ORIGIN` (set it after the Vercel deploy, see
-   "Connect them"). Do not set `DATABASE_SSL`.
-6. Make sure `backend/certs/supabase-ca.crt` is committed; the API reads it at start.
-
-### Vercel (frontend)
-
-1. Import the repository. Root directory: `frontend`. Framework preset: Next.js.
-   Environment variable: `NEXT_PUBLIC_API_URL` = the Render URL (no trailing slash). Deploy.
-
-### Connect them
-
-1. In Render set `FRONTEND_ORIGIN` to the **exact** Vercel URL (scheme and host, no trailing
-   slash, no path) and redeploy. Browser calls from any other origin are refused.
-2. Warm the service up by opening `<render-url>/health` until it returns `200`, then run the
-   checklist in [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md).
-
-## URLs
-
-| What | URL |
-| --- | --- |
-| Frontend (Vercel) | TODO: add the Vercel URL after deploying |
-| Backend API (Render) | TODO: add the Render URL after deploying |
-| Health check | TODO: `<Render URL>/health` |
-
-## LLM
-
-- **Provider:** Google Gemini, called only from the backend over HTTPS with plain `fetch`.
-  The browser never sees the key.
-- **Model:** read from `GEMINI_MODEL` and must be set. There is no built-in default; choose
-  a currently available model in Google AI Studio.
-- **Feature:** exactly one, the **Suggest what to say** button in the workspace. It returns
-  one short line (at most 40 words) the caller could say next at the current stage.
-- **Context sent:** read from the database, never from the request body: prospect name,
-  company and role, the stage purpose, the button, prospect words and note at this stage,
-  and the Stage 5 words when present.
-- **Safeguards:**
-  - the do-not-call block runs before any model work, so a blocked call never reaches
-    Gemini. Any saved stage revision with the `asked_not_to_call` button, or a call already
-    closed as do-not-call, blocks it;
-  - captured text is wrapped as data and the prompt tells the model not to follow
-    instructions inside it;
-  - the only claim allowed about the caller's company is a fixed sentence in the prompt;
-    no prices, results or statistics may be invented;
-  - the 40-word limit is enforced on the server, not only requested;
-  - 9-second timeout, and an in-memory limit of 10 requests per minute per client IP;
-  - the suggestion is stored in its own table (`ai_suggestions`) and shown with a label.
-    It is never written into the prospect's words or the caller's notes.
-- **If it fails:** the button shows a short message and the call is unaffected. Saving
-  stages, moving between stages and closing do not depend on AI. Codes: `AI_NOT_CONFIGURED`,
-  `AI_QUOTA`, `AI_CONFIG`, `AI_UNAVAILABLE`, `RATE_LIMITED`.
-
-## Design decisions
-
-- **Append-only revisions.** Changing a stage never overwrites it: a changed save adds a
-  new revision, and a repeated identical save adds nothing. The database role cannot update
-  or delete `stage_results`. History detail shows the latest version and lists earlier ones.
-- **Derived outcomes.** The status is derived on the server from the highest stage reached:
-  `completed` only if stage 8 was reached, otherwise `ended_early`. Ending a call from an
-  earlier stage keeps the highest stage reached. `abandoned` is a display state (an open
-  call idle for more than two hours) and is never written. The workspace pre-selects a
-  suggested final outcome from the buttons recorded; the caller can change it.
-- **A document request is never a success.** Only an agreed call or meeting counts as
-  success. Document requests, callbacks and referrals are "partial".
-- **Do not call is a restriction, not a sales outcome.** The only trigger is the Stage 6
-  button `asked_not_to_call`, and closing with it requires the prospect's exact words. An
-  ordinary "no" or "not interested" is never upgraded to do-not-call. Once recorded, the
-  prospect cannot be started again and AI is switched off for that call.
-- **Prospect words stay separate.** Prospect words, caller notes and AI text live in
-  different fields and tables, and are labelled differently on screen.
-
-## Known limitations
-
-- **No real authentication.** `APP_ACCESS_CODE` is one shared code, not user accounts. Anyone
-  who has it sees every call, and the browser keeps it in `sessionStorage`.
-- **Do-not-call is matched by name and company** (trimmed, case-insensitive). A spelling
-  variant, a different company name or a different person is not matched.
-- **Free-tier cold starts.** Render's free tier sleeps when idle, so the first request can
-  take a while. The workspace shows a "warming up" message; warm the service up before a demo.
-- **Gemini free-tier data terms.** Check Google's current terms for the Gemini API free
-  tier before sending anything: content may be used to improve Google products. Do not type
-  real personal data you are not allowed to share.
-- **The AI rate limit is in memory.** It resets when the service restarts and is per instance.
-- **CA path.** The API loads `backend/certs/supabase-ca.crt`; `DATABASE_SSL_CA_PATH` is
-  honoured by `scripts/test_db.js` only.
-- **No delete or edit of closed calls.** There is no delete endpoint, and a closed call is
-  read-only.
-
-## Testing
-
-Backend unit tests (pure logic and Gemini handling with fakes; no database, no network, no
-API key needed):
+In PowerShell, from the repository root:
 
 ```powershell
 cd backend
-npm test
+npm ci
+Copy-Item .env.example .env
 ```
 
-Frontend unit tests and checks:
+Edit `backend/.env` and set:
+
+```dotenv
+PORT=4000
+FRONTEND_ORIGIN=http://localhost:3000
+DATABASE_URL=postgresql://callframe_api.<project-ref>:<encoded-password>@<pooler-host>:6543/postgres
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=your-supported-gemini-model-id
+```
+
+Optional:
+
+```dotenv
+APP_ACCESS_CODE=your-long-random-demo-access-code
+```
+
+`APP_ACCESS_CODE` is a shared code, not user authentication. If enabled, supply it to authorized users so they can reach the app. Never expose `DATABASE_URL`, `GEMINI_API_KEY`, or `APP_ACCESS_CODE` in frontend variables or commit them to Git.
+
+Test database connectivity, then run the backend:
+
+```powershell
+node scripts/test_db.js
+npm run dev
+```
+
+The backend listens on port `4000` by default. Check `http://localhost:4000/health`; a healthy response should return HTTP `200` and indicate `db: "up"`.
+
+### 3. Configure and start the frontend
+
+Open a second PowerShell terminal at the repository root:
 
 ```powershell
 cd frontend
+npm ci
+Copy-Item .env.example .env.local
+```
+
+Set this value in `frontend/.env.local`:
+
+```dotenv
+NEXT_PUBLIC_API_URL=http://localhost:4000
+```
+
+Then run:
+
+```powershell
+npm run dev
+```
+
+Open <http://localhost:3000>. `NEXT_PUBLIC_API_URL` is public and is baked into the frontend at build time. Update it and redeploy if the backend URL changes. Never put a secret in a `NEXT_PUBLIC_*` variable.
+
+## Deploy to the required free-tier stack
+
+Deploy the backend first. The frontend requires the public Render URL at build time.
+
+### 1. Supabase — database
+
+- Create/configure the project and run `database/schema.sql` as described above.
+- Use the least-privilege `callframe_api` database role, not the default administrative `postgres` user.
+- Use the Supabase pooler connection string and verified TLS.
+- Keep the database password out of source control and out of Vercel settings.
+
+### 2. Render — backend API
+
+1. In Render, create a **Web Service** and connect the public repository: `jagadiswarambati/CallFrame`.
+2. Set **Root Directory** to `backend`.
+3. Set **Build Command** to:
+
+   ```bash
+   npm ci --no-audit --no-fund && npm run build
+   ```
+
+4. Set **Start Command** to:
+
+   ```bash
+   npm start
+   ```
+
+5. Set **Health Check Path** to `/health`.
+6. Add these environment variables in Render's service settings:
+
+   | Variable | Value |
+   | --- | --- |
+   | `DATABASE_URL` | Supabase pooler URL for `callframe_api` |
+   | `GEMINI_API_KEY` | Gemini API key, only on Render |
+   | `GEMINI_MODEL` | A verified, currently supported Gemini model ID |
+   | `FRONTEND_ORIGIN` | Exact Vercel origin; set after deploying the frontend |
+   | `APP_ACCESS_CODE` | Optional shared access code; if set, make it available to authorized reviewers |
+
+   Render provides `PORT`. Do not set `DATABASE_SSL=false` in production. The service uses `backend/certs/supabase-ca.crt` for verified TLS.
+7. Deploy and open `https://<your-render-service>.onrender.com/health`. Confirm HTTP `200` with the database up before proceeding.
+
+### 3. Vercel — frontend
+
+1. Import `jagadiswarambati/CallFrame` into Vercel.
+2. Set **Root Directory** to `frontend` and use the Next.js framework preset.
+3. Add the following environment variable to the appropriate deployment environment:
+
+   ```text
+   NEXT_PUBLIC_API_URL=https://<your-render-service>.onrender.com
+   ```
+
+   Do not include a trailing slash. Do not put the Gemini key, database URL, or access-code secret here.
+4. Deploy and open the resulting Vercel URL.
+
+### 4. Connect CORS and redeploy
+
+After Vercel provides the final URL, set Render's `FRONTEND_ORIGIN` to that exact origin, including `https://` and without a trailing slash or path. Redeploy/restart the Render service after changing it. If you use separate production and preview origins, add only the exact origins you need, comma-separated.
+
+### 5. Verify the live application
+
+Use [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) as the end-to-end checklist. At minimum, confirm:
+
+- [ ] Render `/health` returns HTTP `200` and the database reports up.
+- [ ] The Vercel page loads without browser console, CORS, or API errors.
+- [ ] Start a Call creates a new call and opens Stage 1.
+- [ ] Stage data saves and is retained when navigating between stages.
+- [ ] End Call persists the outcome and navigates to History only after success.
+- [ ] The call remains in History after refresh, and explicit resume opens the selected in-progress call.
+- [ ] Do-not-call rules block prohibited calls and AI assistance.
+- [ ] **Suggest what to say** returns an actual Gemini-generated suggestion with the AI label, separate from prospect words and caller notes.
+- [ ] Timeouts and failed requests show a recoverable error rather than a false success.
+
+Render free-tier services may sleep while idle; the first request can take longer while the backend starts. Wait for `/health` to return healthy before the demo.
+
+## API overview
+
+All API paths below are relative to the backend base URL.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Health and database status; no access code required |
+| `GET` | `/api/calls?limit=50&offset=0` | List persisted calls, newest first |
+| `POST` | `/api/calls` | Create a new call |
+| `GET` | `/api/calls/:id` | Fetch a call and its stage revisions/AI suggestions |
+| `PUT` | `/api/calls/:id/stages/:stage` | Save a stage revision (stages 1–8) |
+| `PATCH` | `/api/calls/:id/progress` | Record highest stage reached |
+| `POST` | `/api/calls/:id/close` | Close a call with validated final outcome/next step |
+| `POST` | `/api/calls/:id/assist` | Generate one optional AI suggestion for a stage |
+
+When `APP_ACCESS_CODE` is configured, every `/api` request must include the `x-access-code` header. `/health` remains open for the hosting platform's health check.
+
+## Tests and quality checks
+
+Run these before pushing changes or deploying.
+
+Backend:
+
+```powershell
+cd backend
+npm ci
+npm test
+npm run build
+```
+
+Frontend:
+
+```powershell
+cd frontend
+npm ci
 npm test
 npm run lint
 npx tsc --noEmit
 npm run build
 ```
 
-Smoke test against a **running** API with a real database. It creates throw-away calls
-named "Smoke Test ..." (there is no delete endpoint) and never calls Gemini:
+GitHub Actions runs frontend tests, lint, TypeScript checking and production build, plus backend tests and build, on pushes and pull requests. A green unit-test step does not replace the production build and live browser test. Resolve all failed required checks before considering the deployment ready.
+
+For a smoke test against an already-running API and test database, run from `backend/`:
 
 ```powershell
-cd backend
-$env:BASE_URL = "http://localhost:4000"      # or the Render URL
-$env:ACCESS_CODE = "<code>"                  # only if APP_ACCESS_CODE is set on the API
+$env:BASE_URL = "https://<your-render-service>.onrender.com"
+# Only if APP_ACCESS_CODE is enabled:
+$env:ACCESS_CODE = "<your-access-code>"
 node scripts/smoke.mjs
 ```
 
-Quote check. It compares `frontend/src/data/examples.json` with your **local** copy of the
-transcripts, which are not in this repository and must never be committed. Run from the
-repository root:
+The smoke script creates throwaway test calls. The API has no delete endpoint, so avoid repeated runs against production data; prefer a staging/test database.
 
-```powershell
-$env:TRANSCRIPTS_DIR = "C:\path\to\your\transcripts"
-node scripts/verify-quotes.mjs
-```
+## DeepThought submission checklist
 
-Exit code `0` = verified, `1` = a quote or logged outcome did not match, `2` = not run
-(no folder given).
+- [ ] Public GitHub repository containing the frontend, backend, SQL schema, and this README.
+- [ ] README updated with the real Vercel URL, Render URL, Render health URL, and the Gemini model actually configured for the demo.
+- [ ] Live Vercel application tested end to end.
+- [ ] Render health endpoint opens and returns a healthy result.
+- [ ] Six-minute-or-longer video recorded with you visible on camera, walking through the product using a fictional call scenario and explaining one product/design decision.
+- [ ] Video uploaded to Google Drive with **Anyone with the link can view** permission.
+- [ ] Submit the GitHub repository link and Google Drive video link using the DeepThought task page.
 
-Manual end-to-end checklist: [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). GitHub Actions
-(`.github/workflows/ci.yml`) runs the backend tests and build, and the frontend lint,
-type-check and build, on every push.
+The transcripts supplied with the task are for the task only. Do not include them, quote them in this public repository, or publish transcript-derived private material.
+
+## Known limitations
+
+- The optional access code is a shared code, not individual authentication. Anyone authorized with the code can access all stored calls.
+- Do-not-call matching uses normalized prospect name and company; name/company variants can evade matching.
+- The AI rate limit is in memory and resets when the backend restarts.
+- Do not enter real personal or confidential call data in a public demo. Review Google's current Gemini API data terms for your API tier before sending data.
+- The model's current availability and latency depend on the configured provider/model; AI assistance may be unavailable if Gemini times out or returns an upstream error. Core call recording should remain usable independently of AI.
+
+## Further documentation
+
+- Product requirements: [`prd.md`](prd.md)
+- Architecture: [`docs/architecture.md`](docs/architecture.md)
+- End-to-end test plan: [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md)
