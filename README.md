@@ -306,10 +306,11 @@ cd backend
 npm test
 ```
 
-Frontend checks (the frontend has no `npm test`):
+Frontend unit tests and checks:
 
 ```powershell
 cd frontend
+npm test
 npm run lint
 npx tsc --noEmit
 npm run build

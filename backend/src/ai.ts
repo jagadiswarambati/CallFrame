@@ -157,8 +157,19 @@ export function mapGeminiStatus(status: number): AiFailure {
   return { status: 503, code: "AI_UNAVAILABLE", message: "AI assistance is currently unavailable. Please try again." };
 }
 
+export type DiagnosticInfo = {
+  category: "TIMEOUT" | "NETWORK_ERROR" | "AUTH_ERROR" | "INVALID_MODEL" | "RATE_LIMIT" | "PROVIDER_ERROR" | "PARSE_ERROR" | "EMPTY_RESPONSE";
+  httpStatus?: number;
+  providerMessage?: string;
+  durationMs: number;
+  model: string;
+};
+
 export class GeminiFailure extends Error {
-  constructor(readonly failure: AiFailure) {
+  constructor(
+    readonly failure: AiFailure,
+    readonly diagnostics?: DiagnosticInfo,
+  ) {
     super(failure.code);
     this.name = "GeminiFailure";
   }
@@ -175,6 +186,7 @@ export async function generateSuggestion(options: {
 }): Promise<string> {
   const doFetch: FetchLike = options.fetchImpl ?? ((url, init) => fetch(url, init));
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(options.model)}:generateContent`;
+  const startTime = Date.now();
 
   let response: Response;
   try {
@@ -190,26 +202,85 @@ export async function generateSuggestion(options: {
       }),
       signal: AbortSignal.timeout(options.timeoutMs ?? AI_TIMEOUT_MS),
     });
-  } catch {
-    // Timeout, DNS or connection failure.
-    throw new GeminiFailure(mapGeminiStatus(503));
+  } catch (error: unknown) {
+    const durationMs = Date.now() - startTime;
+    const isTimeout =
+      error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError");
+    const category = isTimeout ? "TIMEOUT" : "NETWORK_ERROR";
+    const providerMessage = error instanceof Error ? error.message : String(error);
+    const diagnostics: DiagnosticInfo = {
+      category,
+      providerMessage,
+      durationMs,
+      model: options.model,
+    };
+    console.error("Gemini request failed", diagnostics);
+    throw new GeminiFailure(mapGeminiStatus(503), diagnostics);
   }
 
   if (!response.ok) {
-    // Drain the body without reading it into logs; only the status is used.
-    await response.body?.cancel().catch(() => undefined);
-    throw new GeminiFailure(mapGeminiStatus(response.status));
+    const durationMs = Date.now() - startTime;
+    let providerMessage: string | undefined;
+    try {
+      const errPayload = (await response.json()) as { error?: { message?: string } };
+      if (typeof errPayload?.error?.message === "string") {
+        providerMessage = errPayload.error.message;
+      }
+    } catch {
+      await response.body?.cancel().catch(() => undefined);
+    }
+
+    let category: DiagnosticInfo["category"];
+    if (response.status === 401 || response.status === 403) {
+      category = "AUTH_ERROR";
+    } else if (response.status === 400 || response.status === 404) {
+      category = "INVALID_MODEL";
+    } else if (response.status === 429) {
+      category = "RATE_LIMIT";
+    } else {
+      category = "PROVIDER_ERROR";
+    }
+
+    const diagnostics: DiagnosticInfo = {
+      category,
+      httpStatus: response.status,
+      providerMessage,
+      durationMs,
+      model: options.model,
+    };
+    console.error("Gemini API error", diagnostics);
+    throw new GeminiFailure(mapGeminiStatus(response.status), diagnostics);
   }
 
   let payload: unknown;
   try {
     payload = await response.json();
   } catch {
-    throw new GeminiFailure(mapGeminiStatus(503));
+    const durationMs = Date.now() - startTime;
+    const diagnostics: DiagnosticInfo = {
+      category: "PARSE_ERROR",
+      httpStatus: response.status,
+      providerMessage: "Malformed JSON response from Gemini API",
+      durationMs,
+      model: options.model,
+    };
+    console.error("Gemini response parse error", diagnostics);
+    throw new GeminiFailure(mapGeminiStatus(503), diagnostics);
   }
 
   const text = limitWords(extractText(payload));
-  if (!text) throw new GeminiFailure(mapGeminiStatus(503));
+  if (!text) {
+    const durationMs = Date.now() - startTime;
+    const diagnostics: DiagnosticInfo = {
+      category: "EMPTY_RESPONSE",
+      httpStatus: response.status,
+      providerMessage: "Empty or blocked content parts from Gemini API",
+      durationMs,
+      model: options.model,
+    };
+    console.error("Gemini empty response", diagnostics);
+    throw new GeminiFailure(mapGeminiStatus(503), diagnostics);
+  }
   return text;
 }
 
@@ -248,11 +319,16 @@ export type AssistDeps = {
   timeoutMs?: number;
 };
 
-export type AssistResult = { status: number; body: unknown };
+export type AssistResult = {
+  status: number;
+  body: unknown;
+  diagnostics?: DiagnosticInfo;
+};
 
-const err = (status: number, code: string, message: string): AssistResult => ({
+const err = (status: number, code: string, message: string, diagnostics?: DiagnosticInfo): AssistResult => ({
   status,
   body: { error: { code, message } },
+  ...(diagnostics ? { diagnostics } : {}),
 });
 
 // Order matters: 404 -> DO-NOT-CALL BLOCK -> config -> nothing captured -> Gemini -> save.
@@ -283,7 +359,7 @@ export async function runAssist(deps: AssistDeps, callId: string, stage: number)
     });
   } catch (error) {
     if (error instanceof GeminiFailure) {
-      return err(error.failure.status, error.failure.code, error.failure.message);
+      return err(error.failure.status, error.failure.code, error.failure.message, error.diagnostics);
     }
     throw error;
   }

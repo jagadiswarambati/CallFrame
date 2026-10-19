@@ -677,7 +677,16 @@ app.post("/api/calls/:id/assist", limitAssist, async (request, response) => {
     );
     if (result.status >= 400) {
       const code = (result.body as { error?: { code?: string } }).error?.code;
-      if (code?.startsWith("AI_")) console.error("AI request failed", { code });
+      if (code?.startsWith("AI_")) {
+        console.error("AI request failed", {
+          code,
+          category: result.diagnostics?.category,
+          status: result.diagnostics?.httpStatus,
+          providerMessage: result.diagnostics?.providerMessage,
+          durationMs: result.diagnostics?.durationMs,
+          model: result.diagnostics?.model,
+        });
+      }
     }
     response.status(result.status).json(result.body);
   } catch (error) {
