@@ -29,7 +29,17 @@ export default function HistoryList() {
     finally { setIsLoading(false); }
   }, []);
 
-  useEffect(() => { void loadHistory(); }, [loadHistory]);
+  useEffect(() => {
+    let cancelled = false;
+    // Keep state updates inside async callbacks; this also avoids set-state-in-effect lint errors.
+    fetchCallHistory()
+      .then((history) => { if (!cancelled) setCalls(history); })
+      .catch((error: unknown) => {
+        if (!cancelled) setErrorMessage(error instanceof Error ? error.message : 'Could not load call history.');
+      })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
   const handleResume = (call: CallSession) => {
     if (call.status !== 'in_progress') return;
     setResumeCallId(call.id);

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import React, { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { finalOutcomes, stages, type OutcomeKey } from '@/lib/stages';
 import {
@@ -56,7 +56,8 @@ export default function WorkspacePage() {
   const [prospectName, setProspectName] = useState('');
   const [company, setCompany] = useState('');
   const [prospectRole, setProspectRole] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  // Start in a loading state until the effect determines whether to restore a call.
+  const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
   const [isCloseOpen, setIsCloseOpen] = useState(false);
@@ -68,7 +69,6 @@ export default function WorkspacePage() {
   const [aiSuggestion, setAiSuggestion] = useState('');
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [showSuggestionError, setShowSuggestionError] = useState('');
-  const didLoadRef = useRef(false);
 
   const currentDraft = drafts[currentStage] ?? EMPTY_DRAFT;
   const savedCurrentDraft = activeCall?.stageData[currentStage];
@@ -98,23 +98,29 @@ export default function WorkspacePage() {
   // A call is restored only on a normal refresh or by an explicit Resume action.
   // Start-call links include ?new=1 and can never silently reopen the prior session.
   useEffect(() => {
-    if (didLoadRef.current) return;
-    didLoadRef.current = true;
+    let cancelled = false;
     const params = new URLSearchParams(window.location.search);
     const startFresh = params.get('new') === '1';
     const requestedResume = params.get('resume') || getResumeCallId();
     const id = requestedResume || (!startFresh ? getActiveCallId() : null);
 
-    if (startFresh) {
-      setActiveCallId(null);
-      setResumeCallId(null);
-      return;
-    }
-    if (!id) return;
+    // Start asynchronously to avoid synchronously setting state in an effect. The
+    // cancellation guard prevents a stale restoration request updating an unmounted page.
+    void Promise.resolve().then(async () => {
+      if (startFresh) {
+        setActiveCallId(null);
+        setResumeCallId(null);
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
+      if (!id) {
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
 
-    setIsLoading(true);
-    fetchCallById(id)
-      .then((call) => {
+      try {
+        const call = await fetchCallById(id);
+        if (cancelled) return;
         if (!statusIsActive(call)) {
           setActiveCallId(null);
           setResumeCallId(null);
@@ -124,13 +130,18 @@ export default function WorkspacePage() {
         setActiveCallId(call.id);
         setResumeCallId(null);
         applyCall(call);
-      })
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : 'Could not load the call. Please retry.';
-        setErrorMessage(message);
-        // Do not clear the stored active ID on transient network errors.
-      })
-      .finally(() => setIsLoading(false));
+      } catch (error: unknown) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : 'Could not load the call. Please retry.';
+          setErrorMessage(message);
+          // Do not clear the stored active ID on transient network errors.
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    });
+
+    return () => { cancelled = true; };
   }, [applyCall]);
 
   useEffect(() => {

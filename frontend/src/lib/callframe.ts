@@ -56,9 +56,29 @@ const ACTIVE_CALL_KEY = "callframe.activeCallId";
 const RESUME_CALL_KEY = "callframe.explicitResumeCallId";
 const CALL_DRAFT_PREFIX = "callframe_draft_";
 
-type ApiCall = Record<string, any>;
+type ApiCall = {
+  id?: string | number;
+  prospect_name?: string | null;
+  company?: string | null;
+  prospect_role?: string | null;
+  started_at?: string | null;
+  created_at?: string | null;
+  ended_at?: string | null;
+  status?: CallStatus | null;
+  display_status?: CallDisplayStatus | null;
+  last_stage?: number | string | null;
+  outcome?: string | null;
+  next_step_when?: string | null;
+  next_step_type?: string | null;
+  next_step_channel?: string | null;
+  next_step_detail?: string | null;
+  updated_at?: string | null;
+  do_not_call?: boolean | null;
+  dnc_words?: string | null;
+};
 type ApiStage = { stage: number; revision: number; outcome_key: string | null; prospect_words: string | null; notes: string | null; created_at?: string };
-type ApiCallDetails = { call: ApiCall; stage_results?: ApiStage[]; latest_by_stage?: ApiStage[]; ai_suggestions?: Array<Record<string, any>> };
+type ApiAiSuggestion = { id: number | string; stage: number | string; suggestion: string; created_at: string };
+type ApiCallDetails = { call: ApiCall; stage_results?: ApiStage[]; latest_by_stage?: ApiStage[]; ai_suggestions?: ApiAiSuggestion[] };
 
 function storageGet(key: string): string | null {
   if (typeof window === "undefined") return null;
@@ -93,7 +113,7 @@ function elapsedSeconds(startedAt?: string, endedAt?: string | null): number {
   return Math.max(0, Math.floor((end - start) / 1000));
 }
 
-function mapCall(raw: ApiCall, stages: ApiStage[] = [], ai: Array<Record<string, any>> = [], allStages: ApiStage[] = []): CallSession {
+function mapCall(raw: ApiCall, stages: ApiStage[] = [], ai: ApiAiSuggestion[] = [], allStages: ApiStage[] = []): CallSession {
   const stageData: Record<number, StageDraft> = {};
   for (const item of stages) {
     stageData[Number(item.stage)] = {
