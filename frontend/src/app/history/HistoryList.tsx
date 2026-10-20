@@ -19,7 +19,9 @@ export default function HistoryList() {
   const router = useRouter();
   const [calls, setCalls] = useState<CallSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);\n  const [isExporting, setIsExporting] = useState(false);\n  const [exportError, setExportError] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const loadHistory = useCallback(async () => {
     setIsLoading(true);
@@ -71,7 +73,7 @@ export default function HistoryList() {
       const csvCell = (value: unknown) => {
         let text = value === null || value === undefined ? '' : String(value);
         // Prevent spreadsheet formula injection in user-entered text fields.
-        if (/^[\\s]*[=+\\-@]/.test(text)) text = `'${text}`;
+        if (/^\s*[=+\-@]/.test(text)) text = `'${text}`;
         return `"${text.replace(/"/g, '""')}"`;
       };
       const rows = allCalls.map((call) => [
@@ -92,7 +94,8 @@ export default function HistoryList() {
         call.doNotCall ? 'Yes' : 'No',
         call.timerSeconds,
       ]);
-      const csv = [headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\\r\\n');
+      const csv = [headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\\r\
+');
       const blob = new Blob(['\\uFEFF', csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
