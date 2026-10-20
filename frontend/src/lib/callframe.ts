@@ -219,4 +219,24 @@ export async function fetchCallHistory(): Promise<CallSession[]> {
   return payload.calls.map((call) => mapCall(call));
 }
 
+/** Fetch every saved call in pages for exports without changing the History page's normal loading behavior. */
+export async function fetchAllCallHistory(): Promise<CallSession[]> {
+  const pageSize = 100;
+  const allCalls: CallSession[] = [];
+  let offset = 0;
+  let total = Number.POSITIVE_INFINITY;
+
+  while (offset < total) {
+    const payload = await apiFetch<{ calls: ApiCall[]; total: number }>(
+      `/api/calls?limit=${pageSize}&offset=${offset}`,
+    );
+    allCalls.push(...payload.calls.map((call) => mapCall(call)));
+    total = Number(payload.total);
+    if (payload.calls.length === 0) break;
+    offset += payload.calls.length;
+  }
+
+  return allCalls;
+}
+
 export { ApiError };
