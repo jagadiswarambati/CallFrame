@@ -151,6 +151,24 @@ function isUnauthorized(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 401 && error.code === "UNAUTHORIZED";
 }
 
+function logApiFailure(path: string, init: RequestInit, error: unknown) {
+  const safePath = path
+    .split("?")[0]
+    .replace(/\/api\/calls\/[^/]+/g, "/api/calls/:id");
+  const method = (init.method ?? "GET").toUpperCase();
+  let safeOrigin = "invalid";
+  try {
+    safeOrigin = new URL(apiUrl).origin;
+  } catch {
+    // Report only that configuration is invalid; never echo arbitrary URL input.
+  }
+  const diagnostic = error instanceof ApiError
+    ? { method, origin: safeOrigin, path: safePath, status: error.status, code: error.code }
+    : { method, origin: safeOrigin, path: safePath, code: "UNEXPECTED" };
+
+  console.warn("Callframe API request failed", diagnostic);
+}
+
 const MAX_CODE_ATTEMPTS = 3;
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -159,7 +177,10 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     try {
       return await requestOnce<T>(path, init);
     } catch (error) {
-      if (!isUnauthorized(error) || attempt >= MAX_CODE_ATTEMPTS) throw error;
+      if (!isUnauthorized(error) || attempt >= MAX_CODE_ATTEMPTS) {
+        logApiFailure(path, init, error);
+        throw error;
+      }
       const current = readAccessCode();
       if (current !== used) {
         // Another request supplied a code while this one was in flight: just retry with it.

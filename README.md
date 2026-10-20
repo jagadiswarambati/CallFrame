@@ -191,7 +191,7 @@ Deploy the backend first. The frontend requires the public Render URL at build t
    | `DATABASE_URL` | Supabase pooler URL for `callframe_api` |
    | `GEMINI_API_KEY` | Gemini API key, only on Render |
    | `GEMINI_MODEL` | A verified, currently supported Gemini model ID |
-   | `FRONTEND_ORIGIN` | Exact Vercel origin; set after deploying the frontend |
+   | `FRONTEND_ORIGIN` | Exact frontend origin; set to `https://call-frame-p3ox.vercel.app` (additional preview origins may be comma-separated) |
    | `APP_ACCESS_CODE` | Optional shared access code; if set, make it available to authorized reviewers |
 
    Render provides `PORT`. Do not set `DATABASE_SSL=false` in production. The service uses `backend/certs/supabase-ca.crt` for verified TLS.
@@ -204,7 +204,7 @@ Deploy the backend first. The frontend requires the public Render URL at build t
 3. Add the following environment variable to the appropriate deployment environment:
 
    ```text
-   NEXT_PUBLIC_API_URL=https://<your-render-service>.onrender.com
+   NEXT_PUBLIC_API_URL=https://callframe-backend.onrender.com
    ```
 
    Do not include a trailing slash. Do not put the Gemini key, database URL, or access-code secret here.
@@ -212,7 +212,7 @@ Deploy the backend first. The frontend requires the public Render URL at build t
 
 ### 4. Connect CORS and redeploy
 
-After Vercel provides the final URL, set Render's `FRONTEND_ORIGIN` to that exact origin, including `https://` and without a trailing slash or path. Redeploy/restart the Render service after changing it. If you use separate production and preview origins, add only the exact origins you need, comma-separated.
+Set Render's `FRONTEND_ORIGIN` to `https://call-frame-p3ox.vercel.app` (including `https://`, without a trailing slash or path). The backend also explicitly allows this production origin. If you use separate preview origins, add only the exact origins you need, comma-separated, and redeploy/restart the Render service after changing the variable.
 
 ### 5. Verify the live application
 

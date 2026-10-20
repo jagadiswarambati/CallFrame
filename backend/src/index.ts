@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseError, Pool, type PoolClient } from "pg";
+import { getAllowedOrigins } from "./cors";
 import {
   createRateLimiter,
   normalizeApiKey,
@@ -33,10 +34,7 @@ const app = express();
 // (the AI rate limit is per IP). Do not raise this number unless more proxies are added.
 app.set("trust proxy", 1);
 const port = Number(process.env.PORT ?? 4000);
-const origins = (process.env.FRONTEND_ORIGIN ?? "http://localhost:3000")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const origins = getAllowedOrigins(process.env.FRONTEND_ORIGIN);
 const databaseUrl = process.env.DATABASE_URL;
 const pool = databaseUrl
   ? new Pool({
@@ -95,6 +93,14 @@ function describeError(error: unknown) {
     return { name: error.name, code: (error as { code?: unknown }).code };
   }
   return { type: typeof error };
+}
+
+function describeOrigin(origin: string) {
+  try {
+    return new URL(origin).origin;
+  } catch {
+    return "invalid";
+  }
 }
 
 // True when the database cannot serve us (unreachable, auth failure, overloaded, restarting).
@@ -189,6 +195,7 @@ app.use(
         return;
       }
 
+      console.warn("Rejected CORS origin", { origin: describeOrigin(origin) });
       callback(new ApiError(403, "FORBIDDEN", "Origin not allowed."));
     },
   }),
